@@ -17,7 +17,7 @@ import { z } from "zod";
 
 import { clientFromHeaders } from "./auth.js";
 import { profileInputSchema, checkPulseConsistency } from "./validation.js";
-import { FellowApiError } from "./fellow-api.js";
+import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js";
 
 const VERSION = "0.1.0";
 
@@ -40,14 +40,28 @@ function makeServer(headers: Headers): McpServer {
       const device = await client.getDevice();
       const profiles = await client.listProfiles();
 
-      const lines = [
-        `Aiden: ${device.displayName ?? "Aiden"} (${profiles.length}/14 profile slots used)`,
+      const grouped = { custom: [], stock: [], shared: [], unknown: [] } as Record<
+        ReturnType<typeof categorize>,
+        typeof profiles
+      >;
+      for (const p of profiles) grouped[categorize(p)].push(p);
+
+      const fmt = (p: (typeof profiles)[number]) =>
+        `  ${p.id ?? "(no id)"}  ${p.title}  —  1:${p.ratio} ratio, ${p.bloomTemperature}°C bloom, SS ${p.ssPulseTemperatures.join("/")}°C`;
+
+      const lines: string[] = [
+        `Aiden: ${device.displayName ?? "Aiden"}`,
+        `Custom slots: ${grouped.custom.length}/${CUSTOM_PROFILE_CAP} used`,
         "",
-        ...profiles.map(
-          (p) =>
-            `  ${p.id ?? "(no id)"}  ${p.title}  —  1:${p.ratio} ratio, ${p.bloomTemperature}°C bloom, SS ${p.ssPulseTemperatures.join("/")}°C`,
-        ),
+        `Custom profiles (${grouped.custom.length}):`,
+        ...grouped.custom.map(fmt),
       ];
+      if (grouped.stock.length) {
+        lines.push("", `Stock profiles (${grouped.stock.length}, can't delete):`, ...grouped.stock.map(fmt));
+      }
+      if (grouped.shared.length) {
+        lines.push("", `Shared/community profiles (${grouped.shared.length}):`, ...grouped.shared.map(fmt));
+      }
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
@@ -187,6 +201,7 @@ function makeServer(headers: Headers): McpServer {
       await client.authenticate();
       const device = await client.getDevice();
       const profiles = await client.listProfiles();
+      const customCount = profiles.filter((p) => categorize(p) === "custom").length;
       return {
         content: [
           {
@@ -194,7 +209,8 @@ function makeServer(headers: Headers): McpServer {
             text:
               `Device: ${device.displayName ?? "Aiden"}\n` +
               `ID: ${device.id}\n` +
-              `Profiles: ${profiles.length}/14`,
+              `Custom profile slots: ${customCount}/${CUSTOM_PROFILE_CAP}\n` +
+              `Total profiles visible (incl. stock + shared): ${profiles.length}`,
           },
         ],
       };

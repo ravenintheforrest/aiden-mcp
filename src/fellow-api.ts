@@ -37,6 +37,24 @@ export interface FellowDevice {
   displayName?: string;
 }
 
+/**
+ * Profile categories (Fellow doesn't expose this; inferred from id prefix):
+ *   - "custom":    p0…p13 — user-created profiles, capped at 14
+ *   - "stock":     plocal* — built-in (Light/Medium/Dark/Cold Brew), can't delete
+ *   - "shared":    d* — community/Brew Studio profiles others have shared
+ */
+export type ProfileCategory = "custom" | "stock" | "shared" | "unknown";
+
+export function categorize(profile: FellowProfile): ProfileCategory {
+  const id = profile.id ?? "";
+  if (/^p\d+$/.test(id)) return "custom";
+  if (id.startsWith("plocal")) return "stock";
+  if (/^d\d+$/.test(id)) return "shared";
+  return "unknown";
+}
+
+export const CUSTOM_PROFILE_CAP = 14;
+
 export class FellowApiError extends Error {
   constructor(
     message: string,
