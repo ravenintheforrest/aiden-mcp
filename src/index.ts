@@ -5,10 +5,11 @@
  * Uses the same private API the Fellow iOS app uses; could break without notice.
  *
  * Architecture:
- *   - Streamable HTTP transport (works with desktop and mobile Claude clients)
- *   - Per-request auth via X-Fellow-Email / X-Fellow-Password headers
- *   - No state persisted server-side
- *   - Profile schema validated client-side before calling Fellow's API
+ *   - Streamable HTTP MCP transport at /mcp
+ *   - OAuth 2.0 (auth code + PKCE, RFC 6749 + 7636) at /oauth/*
+ *   - Discovery metadata at /.well-known/* (RFC 9728 + 8414)
+ *   - Per-user Fellow auth: user signs in once, JWT cached for 1 hour
+ *   - Stateless beyond short-lived KV records (codes ≤10min, tokens ≤1h)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,10 +19,18 @@ import { z } from "zod";
 import { clientFromHeaders } from "./auth.js";
 import { profileInputSchema, checkPulseConsistency } from "./validation.js";
 import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js";
+import {
+  protectedResourceMetadata,
+  authorizationServerMetadata,
+} from "./oauth/discovery.js";
+import { handleRegister } from "./oauth/register.js";
+import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
+import { handleToken } from "./oauth/token.js";
+import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
-function makeServer(headers: Headers): McpServer {
+function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
     name: "aiden-mcp",
     version: VERSION,
@@ -32,11 +41,10 @@ function makeServer(headers: Headers): McpServer {
   // ============================================================
   server.tool(
     "list_profiles",
-    "List all brew profiles currently on your Fellow Aiden. Returns profile id, title, and key brew parameters. Use this to find a profile to delete or share.",
+    "List all brew profiles currently on your Fellow Aiden, grouped by category (custom, stock, shared). The 14-profile cap applies only to user-created custom profiles.",
     {},
     async () => {
-      const client = clientFromHeaders(headers);
-      await client.authenticate();
+      const client = await clientFromHeaders(headers, env);
       const device = await client.getDevice();
       const profiles = await client.listProfiles();
 
@@ -77,23 +85,18 @@ function makeServer(headers: Headers): McpServer {
     "Create a new brew profile on your Aiden and return a brew.link URL. The profile will appear in the Fellow iOS app immediately. If the device is at its 14-profile cap, you'll get an error — call delete_profile first to free a slot.",
     profileInputSchema.shape,
     async (input) => {
-      // Re-validate (zod has already enforced ranges, but double-check pulse consistency)
       const parsed = profileInputSchema.parse(input);
       const consistencyErrors = checkPulseConsistency(parsed);
       if (consistencyErrors.length) {
         return {
           isError: true,
           content: [
-            {
-              type: "text",
-              text: `Profile validation failed:\n  ${consistencyErrors.join("\n  ")}`,
-            },
+            { type: "text", text: `Profile validation failed:\n  ${consistencyErrors.join("\n  ")}` },
           ],
         };
       }
 
-      const client = clientFromHeaders(headers);
-      await client.authenticate();
+      const client = await clientFromHeaders(headers, env);
       const created = await client.createProfile(parsed);
       const link = await client.shareProfile(created.id!);
 
@@ -104,7 +107,7 @@ function makeServer(headers: Headers): McpServer {
             text:
               `Created profile "${created.title}" (id: ${created.id}).\n` +
               `brew.link: ${link}\n\n` +
-              `Tap the link in the Fellow iOS app to load the profile, or scan the QR code Fellow generates.`,
+              `Tap the link in the Fellow iOS app to load the profile.`,
           },
         ],
       };
@@ -124,8 +127,7 @@ function makeServer(headers: Headers): McpServer {
         .describe("Either the profile id (e.g. 'p10') or the exact case-sensitive title"),
     },
     async ({ idOrTitle }) => {
-      const client = clientFromHeaders(headers);
-      await client.authenticate();
+      const client = await clientFromHeaders(headers, env);
       const profile = await client.findProfile(idOrTitle);
       if (!profile) {
         return {
@@ -140,12 +142,7 @@ function makeServer(headers: Headers): McpServer {
       }
       await client.deleteProfile(profile.id!);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Deleted profile "${profile.title}" (id: ${profile.id}).`,
-          },
-        ],
+        content: [{ type: "text", text: `Deleted profile "${profile.title}" (id: ${profile.id}).` }],
       };
     },
   );
@@ -163,28 +160,19 @@ function makeServer(headers: Headers): McpServer {
         .describe("Profile id (e.g. 'p10') or exact case-sensitive title"),
     },
     async ({ idOrTitle }) => {
-      const client = clientFromHeaders(headers);
-      await client.authenticate();
+      const client = await clientFromHeaders(headers, env);
       const profile = await client.findProfile(idOrTitle);
       if (!profile) {
         return {
           isError: true,
           content: [
-            {
-              type: "text",
-              text: `No profile matched "${idOrTitle}". Run list_profiles first.`,
-            },
+            { type: "text", text: `No profile matched "${idOrTitle}". Run list_profiles first.` },
           ],
         };
       }
       const link = await client.shareProfile(profile.id!);
       return {
-        content: [
-          {
-            type: "text",
-            text: `brew.link for "${profile.title}": ${link}`,
-          },
-        ],
+        content: [{ type: "text", text: `brew.link for "${profile.title}": ${link}` }],
       };
     },
   );
@@ -197,8 +185,7 @@ function makeServer(headers: Headers): McpServer {
     "Get info about your connected Aiden brewer (name, profile count, slot usage). Lightweight call useful for verifying credentials work before doing heavier operations.",
     {},
     async () => {
-      const client = clientFromHeaders(headers);
-      await client.authenticate();
+      const client = await clientFromHeaders(headers, env);
       const device = await client.getDevice();
       const profiles = await client.listProfiles();
       const customCount = profiles.filter((p) => categorize(p) === "custom").length;
@@ -221,61 +208,110 @@ function makeServer(headers: Headers): McpServer {
 }
 
 // ============================================================
-// Worker entry point — Streamable HTTP transport
+// Worker entry — route dispatch
 // ============================================================
 export default {
-  async fetch(request: Request, env: unknown, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const origin = `${url.protocol}//${url.host}`;
+    const pathname = url.pathname;
 
-    // Health check / root
-    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
-      return new Response(
-        JSON.stringify(
-          {
-            name: "aiden-mcp",
-            version: VERSION,
-            description:
-              "MCP server for Fellow Aiden brewer. Unofficial — not affiliated with Fellow Industries.",
-            transport: "streamable-http",
-            mcp_endpoint: "/mcp",
-            docs: "https://github.com/ravenintheforrest/aiden-mcp",
+    try {
+      // ---- Discovery (no auth) ----
+      if (request.method === "GET" && pathname === "/.well-known/oauth-protected-resource") {
+        return protectedResourceMetadata(origin);
+      }
+      if (request.method === "GET" && pathname === "/.well-known/oauth-authorization-server") {
+        return authorizationServerMetadata(origin);
+      }
+
+      // ---- OAuth endpoints ----
+      if (request.method === "POST" && pathname === "/oauth/register") {
+        return handleRegister(request, env);
+      }
+      if (request.method === "GET" && pathname === "/oauth/authorize") {
+        return handleAuthorizeGet(url, env);
+      }
+      if (request.method === "POST" && pathname === "/oauth/authorize") {
+        return handleAuthorizePost(request, env);
+      }
+      if (request.method === "POST" && pathname === "/oauth/token") {
+        return handleToken(request, env);
+      }
+
+      // ---- Health / root ----
+      if (request.method === "GET" && (pathname === "/" || pathname === "/health")) {
+        return Response.json({
+          name: "aiden-mcp",
+          version: VERSION,
+          description:
+            "MCP server for Fellow Aiden brewer. Unofficial — not affiliated with Fellow Industries.",
+          transport: "streamable-http",
+          mcp_endpoint: "/mcp",
+          oauth: {
+            metadata: `${origin}/.well-known/oauth-authorization-server`,
+            authorize: `${origin}/oauth/authorize`,
+            token: `${origin}/oauth/token`,
+            register: `${origin}/oauth/register`,
           },
-          null,
-          2,
-        ),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    // MCP endpoint
-    if (url.pathname === "/mcp" || url.pathname === "/sse") {
-      try {
-        const transport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: undefined, // stateless mode
-          enableJsonResponse: true, // simpler for one-shot tool calls
-        });
-        const server = makeServer(request.headers);
-        await server.connect(transport);
-
-        return await transport.handleRequest(request);
-      } catch (err) {
-        if (err instanceof FellowApiError) {
-          return new Response(
-            JSON.stringify({ error: err.message, status: err.status }),
-            { status: err.status ?? 500, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        const message = err instanceof Error ? err.message : "Unknown error";
-        return new Response(JSON.stringify({ error: message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
+          docs: "https://github.com/ravenintheforrest/aiden-mcp",
         });
       }
-    }
 
-    return new Response("Not Found", { status: 404 });
+      // ---- MCP resource endpoint ----
+      if (pathname === "/mcp" || pathname === "/sse") {
+        // Pre-flight auth check: per MCP spec, unauthenticated requests must
+        // get HTTP 401 with WWW-Authenticate so the client can initiate OAuth.
+        // Otherwise the MCP transport wraps the failure as a JSON-RPC error
+        // inside a 200, and clients won't know to start OAuth.
+        try {
+          await clientFromHeaders(request.headers, env);
+        } catch (err) {
+          if (err instanceof FellowApiError && err.status === 401) {
+            return new Response(
+              JSON.stringify({
+                error: "unauthorized",
+                error_description: err.message,
+              }),
+              {
+                status: 401,
+                headers: {
+                  "Content-Type": "application/json",
+                  "WWW-Authenticate": `Bearer realm="aiden-mcp", resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+                },
+              },
+            );
+          }
+          throw err;
+        }
+
+        const transport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true,
+        });
+        const server = makeServer(request.headers, env);
+        await server.connect(transport);
+        return await transport.handleRequest(request);
+      }
+
+      return new Response("Not Found", { status: 404 });
+    } catch (err) {
+      if (err instanceof FellowApiError) {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (err.status === 401) {
+          // RFC 6750: tell the client where to authenticate
+          headers["WWW-Authenticate"] = `Bearer realm="aiden-mcp", resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
+        }
+        return new Response(JSON.stringify({ error: err.message, status: err.status }), {
+          status: err.status ?? 500,
+          headers,
+        });
+      }
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return new Response(JSON.stringify({ error: message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   },
 };

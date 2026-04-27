@@ -12,3 +12,10 @@ enabled = true
 
 [placement]
 mode = "smart"
+
+# OAuth state: client registrations, auth codes, access tokens.
+# Auth codes have 10min TTL, access tokens 1hr, client registrations long-lived.
+# Nothing in here is a Fellow password — only short-lived JWTs Fellow itself issues.
+[[kv_namespaces]]
+binding = "AIDEN_OAUTH"
+id = "e9be8ca2a2bf450a9f3073f337d56b9b"

@@ -76,6 +76,21 @@ export class FellowClient {
     private password: string,
   ) {}
 
+  /**
+   * Construct a client from an existing Fellow JWT (no email/password).
+   * Used by the OAuth flow: we already authenticated during /oauth/authorize,
+   * the JWT is in KV, we hand it back to a fresh client for resource requests.
+   */
+  static fromJwt(jwt: string): FellowClient {
+    const c = new FellowClient("", "");
+    c.token = jwt;
+    return c;
+  }
+
+  getToken(): string | null {
+    return this.token;
+  }
+
   private headers(): HeadersInit {
     const h: HeadersInit = {
       "Content-Type": "application/json",
@@ -86,6 +101,7 @@ export class FellowClient {
   }
 
   async authenticate(): Promise<void> {
+    if (this.token) return; // already authenticated (e.g. via fromJwt)
     const r = await fetch(`${BASE_URL}/auth/login`, {
       method: "POST",
       headers: this.headers(),
