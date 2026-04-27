@@ -1,0 +1,14 @@
+name = "aiden-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain attached after first deploy via:
+# CF dashboard → Workers & Pages → aiden-mcp → Settings → Domains & Routes → Add custom domain → aidenmcp.ravenhoward.org
+# (or via wrangler.toml routes block, but dashboard is simpler the first time)
+
+[observability]
+enabled = true
+
+[placement]
+mode = "smart"

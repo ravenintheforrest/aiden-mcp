@@ -1,0 +1,22 @@
+{
+  "name": "aiden-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Fellow Aiden coffee brewer. Unofficial — not affiliated with Fellow Industries.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.99.0"
+  }
+}
