@@ -177,90 +177,143 @@ function renderSignInHtml(q: AuthorizeQuery, errorMessage?: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sign in — aiden-mcp</title>
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    /* Single explicit color scheme that's readable in any host context.
+       The OAuth flow opens in a new tab so we control the rendering, but
+       some clients embed it — solid colors are more predictable than
+       prefers-color-scheme. */
+    * { box-sizing: border-box; }
+    html, body {
       margin: 0;
-      padding: 2rem 1rem;
-      background: #f7f5f2;
-      color: #1a1a1a;
+      padding: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", sans-serif;
+      background: #0f1115;
+      color: #f5f5f5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
     }
-    @media (prefers-color-scheme: dark) {
-      body { background: #1a1a1a; color: #f0f0f0; }
-      .card { background: #2a2a2a; border-color: #3a3a3a; }
-      input { background: #1a1a1a; color: #f0f0f0; border-color: #444; }
+    .wrap {
+      max-width: 30rem;
+      margin: 0 auto;
+      padding: 3rem 1.25rem 2rem;
     }
     .card {
-      max-width: 28rem;
-      margin: 2rem auto;
+      background: #1a1d23;
+      border: 1px solid #2a2e36;
+      border-radius: 14px;
       padding: 2rem;
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 12px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.35);
     }
-    h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
-    .sub { color: #777; font-size: .9rem; margin-bottom: 1.5rem; }
-    label { display: block; font-size: .85rem; margin: 1rem 0 .35rem; font-weight: 500; }
-    input[type="email"], input[type="password"] {
-      width: 100%;
-      box-sizing: border-box;
-      padding: .65rem .75rem;
-      font-size: 1rem;
-      border: 1px solid #bbb;
-      border-radius: 6px;
+    h1 {
+      margin: 0 0 .35rem;
+      font-size: 1.45rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: #f5f5f5;
     }
-    button {
-      margin-top: 1.5rem;
-      width: 100%;
-      padding: .75rem;
-      font-size: 1rem;
+    .sub {
+      color: #b8bcc4;
+      font-size: .92rem;
+      margin: 0 0 1.75rem;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-size: .85rem;
       font-weight: 500;
-      background: #c97f4a;
-      color: white;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
+      color: #e0e3ea;
+      margin: 1.25rem 0 .4rem;
     }
-    button:hover { background: #b56e3d; }
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: .75rem .85rem;
+      font-size: 1rem;
+      font-family: inherit;
+      color: #f5f5f5;
+      background: #0f1115;
+      border: 1px solid #3a3f48;
+      border-radius: 8px;
+      outline: none;
+      transition: border-color .15s ease;
+    }
+    input[type="email"]:focus,
+    input[type="password"]:focus {
+      border-color: #c97f4a;
+      box-shadow: 0 0 0 3px rgba(201, 127, 74, 0.18);
+    }
+    input::placeholder { color: #5b606b; }
+    button {
+      margin-top: 1.75rem;
+      width: 100%;
+      padding: .85rem;
+      font-size: 1rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: white;
+      background: #c97f4a;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background .15s ease;
+    }
+    button:hover { background: #b8703f; }
+    button:active { background: #a86638; }
     .error {
-      background: #fee2e2;
-      color: #991b1b;
-      padding: .75rem 1rem;
-      border-radius: 6px;
-      margin-bottom: 1rem;
+      background: rgba(220, 60, 60, 0.12);
+      border: 1px solid rgba(220, 60, 60, 0.35);
+      color: #ff8c8c;
+      padding: .8rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
       font-size: .9rem;
+      line-height: 1.4;
     }
     .note {
-      margin-top: 1.5rem;
-      padding-top: 1rem;
-      border-top: 1px solid #eee;
-      color: #777;
+      margin-top: 1.75rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid #2a2e36;
+      color: #9ba0a8;
       font-size: .8rem;
-      line-height: 1.5;
+      line-height: 1.55;
     }
-    .note a { color: #c97f4a; }
+    .note a { color: #d99a6a; text-decoration: none; }
+    .note a:hover { text-decoration: underline; }
+    .badge {
+      display: inline-block;
+      font-size: .7rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #9ba0a8;
+      background: #0f1115;
+      border: 1px solid #2a2e36;
+      padding: .15rem .45rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Sign in to Fellow</h1>
-    <p class="sub">aiden-mcp is requesting access to your Aiden brewer.</p>
-    ${error}
-    <form method="post" action="/oauth/authorize" autocomplete="on">
-      ${fields}
-      <label for="fellow_email">Fellow email</label>
-      <input id="fellow_email" name="fellow_email" type="email" required autocomplete="username" autofocus />
-      <label for="fellow_password">Fellow password</label>
-      <input id="fellow_password" name="fellow_password" type="password" required autocomplete="current-password" />
-      <button type="submit">Sign in &amp; authorize</button>
-    </form>
-    <div class="note">
-      Your password reaches this server exactly once — it's used to sign in to Fellow's API and is then discarded.
-      Only the resulting Fellow JWT (which Fellow itself issues) is briefly cached so this server can call Fellow on your behalf.
-      <br /><br />
-      Unofficial — not affiliated with Fellow Industries.
-      <a href="https://github.com/ravenintheforrest/aiden-mcp">Source</a>.
+  <div class="wrap">
+    <div class="card">
+      <div class="badge">aiden-mcp</div>
+      <h1>Sign in to Fellow</h1>
+      <p class="sub">An MCP client is requesting access to your Aiden brewer. Sign in with your Fellow account to authorize.</p>
+      ${error}
+      <form method="post" action="/oauth/authorize" autocomplete="on">
+        ${fields}
+        <label for="fellow_email">Fellow email</label>
+        <input id="fellow_email" name="fellow_email" type="email" required autocomplete="username" autofocus placeholder="you@example.com" />
+        <label for="fellow_password">Fellow password</label>
+        <input id="fellow_password" name="fellow_password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+        <button type="submit">Sign in &amp; authorize</button>
+      </form>
+      <div class="note">
+        Your password reaches this server exactly once — it's used to sign in to Fellow's API and is then discarded.
+        Only the resulting Fellow JWT (which Fellow itself issues) is briefly cached so this server can call Fellow on your behalf.
+        <br /><br />
+        Unofficial — not affiliated with Fellow Industries.
+        <a href="https://github.com/ravenintheforrest/aiden-mcp">View source</a>.
+      </div>
     </div>
   </div>
 </body>

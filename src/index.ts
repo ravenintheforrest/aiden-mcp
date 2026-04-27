@@ -54,8 +54,17 @@ function makeServer(headers: Headers, env: Env): McpServer {
       >;
       for (const p of profiles) grouped[categorize(p)].push(p);
 
-      const fmt = (p: (typeof profiles)[number]) =>
-        `  ${p.id ?? "(no id)"}  ${p.title}  —  1:${p.ratio} ratio, ${p.bloomTemperature}°C bloom, SS ${p.ssPulseTemperatures.join("/")}°C`;
+      // Stock and shared profiles can have null/missing fields, so be defensive.
+      const fmt = (p: (typeof profiles)[number]) => {
+        const id = p.id ?? "(no id)";
+        const title = p.title ?? "(untitled)";
+        const ratioPart = p.ratio != null ? `1:${p.ratio} ratio` : "";
+        const bloomPart = p.bloomTemperature != null ? `${p.bloomTemperature}°C bloom` : "";
+        const ss = Array.isArray(p.ssPulseTemperatures) ? p.ssPulseTemperatures : [];
+        const ssPart = ss.length ? `SS ${ss.join("/")}°C` : "";
+        const details = [ratioPart, bloomPart, ssPart].filter(Boolean).join(", ");
+        return details ? `  ${id}  ${title}  —  ${details}` : `  ${id}  ${title}`;
+      };
 
       const lines: string[] = [
         `Aiden: ${device.displayName ?? "Aiden"}`,
