@@ -126,6 +126,93 @@ function makeServer(headers: Headers, env: Env): McpServer {
   );
 
   // ============================================================
+  // update_profile — dial in an existing recipe in place
+  // ============================================================
+  server.tool(
+    "update_profile",
+    "Update an existing brew profile on your Aiden in place. Pass the profile id (or exact title) plus ANY subset of the profile fields you want to change — unspecified fields keep their current values. Useful for dialing in an existing recipe (e.g. nudge ratio, drop a temperature) without delete-and-recreate. The brew.link URL stays the same since the profile id doesn't change.",
+    {
+      idOrTitle: z
+        .string()
+        .min(1)
+        .describe("Profile id (e.g. 'p1') or exact case-sensitive title (e.g. 'Mpemba v3')"),
+      title: z.string().min(1).max(50).optional().describe("New title (optional)"),
+      ratio: z.coerce.number().min(14).max(20).optional(),
+      bloomEnabled: z.coerce.boolean().optional(),
+      bloomRatio: z.coerce.number().min(1).max(3).optional(),
+      bloomDuration: z.coerce.number().int().min(1).max(120).optional(),
+      bloomTemperature: z.coerce.number().min(50).max(99).optional(),
+      ssPulsesEnabled: z.coerce.boolean().optional(),
+      ssPulsesNumber: z.coerce.number().int().min(1).max(10).optional(),
+      ssPulsesInterval: z.coerce.number().int().min(5).max(60).optional(),
+      ssPulseTemperatures: z
+        .preprocess((v) => (typeof v === "string" ? JSON.parse(v) : v), z.array(z.coerce.number().min(50).max(99)))
+        .optional(),
+      batchPulsesEnabled: z.coerce.boolean().optional(),
+      batchPulsesNumber: z.coerce.number().int().min(1).max(10).optional(),
+      batchPulsesInterval: z.coerce.number().int().min(5).max(60).optional(),
+      batchPulseTemperatures: z
+        .preprocess((v) => (typeof v === "string" ? JSON.parse(v) : v), z.array(z.coerce.number().min(50).max(99)))
+        .optional(),
+    },
+    async (input) => {
+      const { idOrTitle, ...changes } = input;
+      const client = await clientFromHeaders(headers, env);
+      const existing = await client.findProfile(idOrTitle);
+      if (!existing) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `No profile matched "${idOrTitle}". Run list_profiles first — note that titles are case-sensitive.`,
+            },
+          ],
+        };
+      }
+      // Merge changes with the existing profile so unspecified fields keep their values
+      const merged = { ...existing, ...changes };
+      // Drop the id from the body — it's in the URL path
+      const { id, ...body } = merged;
+
+      // Sanity: keep pulse counts and temperature arrays consistent
+      const consistencyErrors = checkPulseConsistency({
+        ...body,
+        // zod parsed the optional fields, so set defaults the validator expects
+        bloomEnabled: body.bloomEnabled ?? true,
+        ssPulsesEnabled: body.ssPulsesEnabled ?? true,
+        batchPulsesEnabled: body.batchPulsesEnabled ?? true,
+        profileType: body.profileType ?? 0,
+      } as never);
+      if (consistencyErrors.length) {
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: `Update would create inconsistent profile:\n  ${consistencyErrors.join("\n  ")}` },
+          ],
+        };
+      }
+
+      const updated = await client.updateProfile(
+        existing.id!,
+        body as Omit<typeof existing, "id">,
+      );
+      const changedFields = Object.keys(changes);
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Updated "${updated.title}" (id: ${existing.id}).\n` +
+              `Changed: ${changedFields.length ? changedFields.join(", ") : "(no field changes — title only)"}\n` +
+              `Profile id unchanged, so existing brew.link still works.`,
+          },
+        ],
+      };
+    },
+  );
+
+  // ============================================================
   // delete_profile
   // ============================================================
   server.tool(
@@ -367,6 +454,7 @@ export default {
         const FELLOW_AUTH_TOOLS = new Set([
           "list_profiles",
           "create_profile",
+          "update_profile",
           "delete_profile",
           "share_profile",
           "get_device_info",

@@ -9,10 +9,23 @@ import { z } from "zod";
  * client-side rather than a generic 400 from Fellow.
  */
 
-const tempSchema = z
+// Use z.coerce so scalars submitted as strings (some MCP clients normalize that
+// way) get converted before validation. Booleans coerce strings "true"/"false"
+// loosely — Boolean("false") would be true, so we handle string-form explicitly.
+const tempSchema = z.coerce
   .number()
   .min(50, "Temperature must be ≥ 50°C")
   .max(99, "Temperature must be ≤ 99°C");
+
+const boolish = z.preprocess(
+  (v) => (typeof v === "string" ? v.toLowerCase() !== "false" && v !== "0" && v !== "" : v),
+  z.boolean(),
+);
+
+const tempArray = z.preprocess(
+  (v) => (typeof v === "string" ? JSON.parse(v) : v),
+  z.array(tempSchema),
+);
 
 export const profileInputSchema = z.object({
   title: z
@@ -21,33 +34,28 @@ export const profileInputSchema = z.object({
     .max(50, "Title max 50 characters")
     .regex(/^[A-Za-z0-9 _\-.,'’()&!]+$/, "Title contains unsupported characters"),
 
-  ratio: z
-    .number()
-    .min(14, "Ratio must be ≥ 14 (1:14)")
-    .max(20, "Ratio must be ≤ 20 (1:20)"),
+  ratio: z.coerce.number().min(14, "Ratio must be ≥ 14 (1:14)").max(20, "Ratio must be ≤ 20 (1:20)"),
 
-  bloomEnabled: z.boolean().default(true),
-  bloomRatio: z.number().min(1).max(3),
-  bloomDuration: z.number().int().min(1).max(120),
+  bloomEnabled: boolish.default(true),
+  bloomRatio: z.coerce.number().min(1).max(3),
+  bloomDuration: z.coerce.number().int().min(1).max(120),
   bloomTemperature: tempSchema,
 
-  ssPulsesEnabled: z.boolean().default(true),
-  ssPulsesNumber: z.number().int().min(1).max(10),
-  ssPulsesInterval: z.number().int().min(5).max(60),
-  ssPulseTemperatures: z
-    .array(tempSchema)
-    .min(1, "Need at least one SS pulse temperature")
-    .max(10, "Max 10 SS pulses"),
+  ssPulsesEnabled: boolish.default(true),
+  ssPulsesNumber: z.coerce.number().int().min(1).max(10),
+  ssPulsesInterval: z.coerce.number().int().min(5).max(60),
+  ssPulseTemperatures: tempArray.refine((a) => a.length >= 1 && a.length <= 10, {
+    message: "1–10 SS pulse temperatures",
+  }),
 
-  batchPulsesEnabled: z.boolean().default(true),
-  batchPulsesNumber: z.number().int().min(1).max(10),
-  batchPulsesInterval: z.number().int().min(5).max(60),
-  batchPulseTemperatures: z
-    .array(tempSchema)
-    .min(1, "Need at least one batch pulse temperature")
-    .max(10, "Max 10 batch pulses"),
+  batchPulsesEnabled: boolish.default(true),
+  batchPulsesNumber: z.coerce.number().int().min(1).max(10),
+  batchPulsesInterval: z.coerce.number().int().min(5).max(60),
+  batchPulseTemperatures: tempArray.refine((a) => a.length >= 1 && a.length <= 10, {
+    message: "1–10 batch pulse temperatures",
+  }),
 
-  profileType: z.number().int().default(0),
+  profileType: z.coerce.number().int().default(0),
 });
 
 export type ProfileInput = z.infer<typeof profileInputSchema>;

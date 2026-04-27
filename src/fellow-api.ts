@@ -166,6 +166,27 @@ export class FellowClient {
     return body;
   }
 
+  async updateProfile(
+    profileId: string,
+    profile: Omit<FellowProfile, "id">,
+  ): Promise<FellowProfile> {
+    const { id } = await this.getDevice();
+    const r = await fetch(`${BASE_URL}/devices/${id}/profiles/${profileId}`, {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(profile),
+    });
+    const body = (await r.json()) as FellowProfile & { message?: string };
+    if (!r.ok || (!body.id && body.id !== "")) {
+      throw new FellowApiError(
+        body.message || `Failed to update profile ${profileId}`,
+        r.status,
+        body,
+      );
+    }
+    return body;
+  }
+
   async deleteProfile(profileId: string): Promise<void> {
     const { id } = await this.getDevice();
     const r = await fetch(`${BASE_URL}/devices/${id}/profiles/${profileId}`, {
