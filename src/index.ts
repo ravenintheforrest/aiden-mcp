@@ -117,8 +117,8 @@ function makeServer(headers: Headers, env: Env): McpServer {
             type: "text",
             text:
               `Created profile "${created.title}" (id: ${created.id}).\n` +
-              `brew.link: ${link}\n\n` +
-              `Tap the link in the Fellow iOS app to load the profile.`,
+              `The profile is now on your Aiden — walk over and brew it directly, no extra step needed.\n\n` +
+              `brew.link (optional, for sharing or QR-scanning at the device): ${link}`,
           },
         ],
       };
