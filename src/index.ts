@@ -19,6 +19,8 @@ import { z } from "zod";
 import { clientFromHeaders } from "./auth.js";
 import { profileInputSchema, checkPulseConsistency } from "./validation.js";
 import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js";
+import { fetchCoffeeDetails } from "./coffee-fetcher.js";
+import { brewingGuidelines } from "./brewing-guidelines.js";
 import {
   protectedResourceMetadata,
   authorizationServerMetadata,
@@ -187,6 +189,97 @@ function makeServer(headers: Headers, env: Env): McpServer {
   );
 
   // ============================================================
+  // fetch_coffee_details — scrape a roaster product page
+  // ============================================================
+  server.tool(
+    "fetch_coffee_details",
+    "Fetch a coffee from a roaster's product page (Counter Culture, Onyx, Sey, Heart, etc. — any Shopify-based roaster) and return structured details: name, varieties, process, elevation, country, tasting notes, story. Use this when the user pastes a URL and wants you to design a brew profile from it. Does NOT require Aiden auth — works on URLs alone.",
+    {
+      url: z
+        .string()
+        .url()
+        .describe("Roaster product page URL, e.g. https://counterculturecoffee.com/products/mpemba"),
+    },
+    async ({ url }) => {
+      const details = await fetchCoffeeDetails(url);
+
+      // Format as readable text — easier for the LLM to reason over than raw JSON
+      const lines: string[] = [
+        details.coffee_name ? `Coffee: ${details.coffee_name}` : "Coffee: (name not found)",
+        details.roaster ? `Roaster: ${details.roaster}` : "",
+        details.country ? `Country: ${details.country}` : "",
+        details.region ? `Region: ${details.region}` : "",
+        details.producer ? `Producer: ${details.producer}` : "",
+        details.elevation ? `Elevation: ${details.elevation}` : "",
+        details.varieties?.length ? `Varieties: ${details.varieties.join(", ")}` : "",
+        details.process ? `Process: ${details.process}` : "",
+        details.tasting_notes?.length ? `Tasting notes: ${details.tasting_notes.join(", ")}` : "",
+        "",
+      ];
+      if (details.description) {
+        lines.push(`Description:\n${details.description.slice(0, 600)}${details.description.length > 600 ? "…" : ""}`);
+      }
+      if (details.story) {
+        lines.push("", `Story:\n${details.story.slice(0, 800)}${details.story.length > 800 ? "…" : ""}`);
+      }
+      if (details.warnings.length) {
+        lines.push("", `⚠ Warnings:`, ...details.warnings.map((w) => `  - ${w}`));
+      }
+      lines.push("", `Source: ${details.source} | URL: ${details.url}`);
+
+      return {
+        content: [{ type: "text", text: lines.filter((l) => l !== "").join("\n") || "(no details extracted)" }],
+      };
+    },
+  );
+
+  // ============================================================
+  // brewing_guidelines — encoded heuristics for designing profiles
+  // ============================================================
+  server.tool(
+    "brewing_guidelines",
+    "Get Aiden-specific brewing guidelines tailored to a coffee's characteristics. Returns brewing principles + a starting-point recipe. Use this AFTER fetching coffee details (or when user provides them directly), then design the actual create_profile call using the returned principles. Does NOT require Aiden auth.",
+    {
+      process: z.string().optional().describe("Process: washed, natural, honey, anaerobic, etc."),
+      varieties: z.array(z.string()).optional().describe("Varietal names, e.g. ['Bourbon', 'SL28']"),
+      elevation: z.string().optional().describe("Elevation, e.g. '1,800–2,000 masl' or '1750m'"),
+      tasting_notes: z.array(z.string()).optional().describe("Notes on the bag, e.g. ['fig', 'strawberry', 'honey']"),
+      flavor_goal: z
+        .string()
+        .optional()
+        .describe(
+          "What the user is trying to achieve, e.g. 'more fruit', 'less acidity', 'bolder body'. Drives explicit recipe adjustments.",
+        ),
+      user_preference_ratio: z
+        .number()
+        .optional()
+        .describe("User's typical ratio (e.g. 15 for 1:15). Defaults to 1:15 washed, 1:16 natural."),
+    },
+    async (input) => {
+      const guidelines = brewingGuidelines(input);
+      const lines = [
+        guidelines.summary,
+        "",
+        "Principles:",
+        ...guidelines.principles.map((p, i) => `  ${i + 1}. ${p}`),
+        "",
+        "Starting-point recipe (adjust based on principles above):",
+        `  Ratio:   ${guidelines.starting_recipe.ratio}`,
+        `  Bloom:   ${guidelines.starting_recipe.bloom}`,
+        `  SS:      ${guidelines.starting_recipe.ss_pulses}`,
+        `  Batch:   ${guidelines.starting_recipe.batch_pulses}`,
+        `  Grind:   ${guidelines.starting_recipe.grind_setting}`,
+      ];
+      if (guidelines.warnings.length) {
+        lines.push("", "Warnings:", ...guidelines.warnings.map((w) => `  ⚠ ${w}`));
+      }
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+      };
+    },
+  );
+
+  // ============================================================
   // get_device_info
   // ============================================================
   server.tool(
@@ -269,29 +362,49 @@ export default {
 
       // ---- MCP resource endpoint ----
       if (pathname === "/mcp" || pathname === "/sse") {
-        // Pre-flight auth check: per MCP spec, unauthenticated requests must
-        // get HTTP 401 with WWW-Authenticate so the client can initiate OAuth.
-        // Otherwise the MCP transport wraps the failure as a JSON-RPC error
-        // inside a 200, and clients won't know to start OAuth.
-        try {
-          await clientFromHeaders(request.headers, env);
-        } catch (err) {
-          if (err instanceof FellowApiError && err.status === 401) {
-            return new Response(
-              JSON.stringify({
-                error: "unauthorized",
-                error_description: err.message,
-              }),
-              {
-                status: 401,
-                headers: {
-                  "Content-Type": "application/json",
-                  "WWW-Authenticate": `Bearer realm="aiden-mcp", resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
-                },
-              },
-            );
+        // Tools split by whether they need Fellow credentials.
+        // Pure-compute / pure-fetch tools work for anyone — no Fellow account needed.
+        const FELLOW_AUTH_TOOLS = new Set([
+          "list_profiles",
+          "create_profile",
+          "delete_profile",
+          "share_profile",
+          "get_device_info",
+        ]);
+
+        // Inspect the JSON-RPC method without consuming the body
+        let needsAuth = false;
+        if (request.method === "POST") {
+          try {
+            const cloned = request.clone();
+            const body = (await cloned.json()) as { method?: string; params?: { name?: string } };
+            // tools/list and initialize are public so clients can discover capabilities
+            if (body.method === "tools/call" && FELLOW_AUTH_TOOLS.has(body.params?.name ?? "")) {
+              needsAuth = true;
+            }
+          } catch {
+            // Couldn't parse — let transport handle the error
           }
-          throw err;
+        }
+
+        if (needsAuth) {
+          try {
+            await clientFromHeaders(request.headers, env);
+          } catch (err) {
+            if (err instanceof FellowApiError && err.status === 401) {
+              return new Response(
+                JSON.stringify({ error: "unauthorized", error_description: err.message }),
+                {
+                  status: 401,
+                  headers: {
+                    "Content-Type": "application/json",
+                    "WWW-Authenticate": `Bearer realm="aiden-mcp", resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+                  },
+                },
+              );
+            }
+            throw err;
+          }
         }
 
         const transport = new WebStandardStreamableHTTPServerTransport({
