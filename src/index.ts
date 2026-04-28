@@ -371,22 +371,23 @@ function makeServer(headers: Headers, env: Env): McpServer {
   // ============================================================
   server.tool(
     "list_schedules",
-    "List all scheduled brews on your Aiden. Each schedule has a recurrence pattern (which days of the week), a time of day, a profile to brew, and a water amount. Schedules can be enabled/disabled individually.",
+    "List all scheduled brews on your Aiden, including the raw JSON. Each schedule has a recurrence pattern (which days of the week), a time of day, a profile to brew, and a water amount. Schedules can be enabled/disabled individually. Raw JSON helps diagnose any non-standard fields the device or iOS app may set (e.g. one-shot markers).",
     {},
     async () => {
       const client = await clientFromHeaders(headers, env);
-      const schedules = await client.listSchedules();
+      const schedules = (await client.listSchedules()) as unknown as Array<Record<string, unknown>>;
       if (!schedules.length) {
         return { content: [{ type: "text", text: "No scheduled brews on this Aiden." }] };
       }
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-      const fmt = (s: typeof schedules[number]) => {
-        const days = s.days
-          .map((on, i) => (on ? dayNames[i] : null))
+      const fmt = (s: Record<string, unknown>) => {
+        const days = (s.days as boolean[] | undefined)
+          ?.map((on, i) => (on ? dayNames[i] : null))
           .filter(Boolean)
           .join(",");
-        const hh = Math.floor(s.secondFromStartOfTheDay / 3600);
-        const mm = Math.floor((s.secondFromStartOfTheDay % 3600) / 60);
+        const sec = (s.secondFromStartOfTheDay as number | undefined) ?? 0;
+        const hh = Math.floor(sec / 3600);
+        const mm = Math.floor((sec % 3600) / 60);
         const time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
         const status = s.enabled ? "enabled" : "disabled";
         return `  ${s.id ?? "(no id)"}  ${days || "no days"}  ${time}  ${s.amountOfWater}mL  profile:${s.profileId}  [${status}]`;
@@ -395,7 +396,11 @@ function makeServer(headers: Headers, env: Env): McpServer {
         content: [
           {
             type: "text",
-            text: `Schedules (${schedules.length}):\n${schedules.map(fmt).join("\n")}`,
+            text:
+              `Schedules (${schedules.length}, device local time):\n` +
+              schedules.map(fmt).join("\n") +
+              "\n\nRaw JSON (useful for spotting non-standard fields like one-shot markers):\n" +
+              JSON.stringify(schedules, null, 2),
           },
         ],
       };
@@ -444,6 +449,12 @@ function makeServer(headers: Headers, env: Env): McpServer {
       });
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
       const dayList = days.map((on, i) => (on ? dayNames[i] : null)).filter(Boolean).join(",") || "(no days)";
+      const onlyOneDay = days.filter(Boolean).length === 1;
+      const oneShotNote = onlyOneDay
+        ? "\n\n⚠ One-shot caveat: This is a recurring weekly schedule with one day enabled. It will fire again next week on the same day. After it fires today, call delete_schedule or toggle_schedule(enabled=false) to prevent that — or remind the user to do so."
+        : "";
+      const tzNote =
+        "\n\n⚠ Time zone: " + time + " is in the brewer's local time, set on the Aiden device itself. Verify the device clock matches the user's wall clock before relying on this for time-critical brews.";
       return {
         content: [
           {
@@ -451,7 +462,9 @@ function makeServer(headers: Headers, env: Env): McpServer {
             text:
               `Scheduled brew created (id: ${created.id}).\n` +
               `Profile ${profileId} will brew ${amountOfWater}mL at ${time} on ${dayList} (device local time).\n` +
-              `${enabled ? "Active" : "Disabled — call toggle_schedule to enable when ready"}.`,
+              `${enabled ? "Active" : "Disabled — call toggle_schedule to enable when ready"}.` +
+              tzNote +
+              oneShotNote,
           },
         ],
       };
