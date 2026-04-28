@@ -367,6 +367,135 @@ function makeServer(headers: Headers, env: Env): McpServer {
   );
 
   // ============================================================
+  // list_schedules
+  // ============================================================
+  server.tool(
+    "list_schedules",
+    "List all scheduled brews on your Aiden. Each schedule has a recurrence pattern (which days of the week), a time of day, a profile to brew, and a water amount. Schedules can be enabled/disabled individually.",
+    {},
+    async () => {
+      const client = await clientFromHeaders(headers, env);
+      const schedules = await client.listSchedules();
+      if (!schedules.length) {
+        return { content: [{ type: "text", text: "No scheduled brews on this Aiden." }] };
+      }
+      const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const fmt = (s: typeof schedules[number]) => {
+        const days = s.days
+          .map((on, i) => (on ? dayNames[i] : null))
+          .filter(Boolean)
+          .join(",");
+        const hh = Math.floor(s.secondFromStartOfTheDay / 3600);
+        const mm = Math.floor((s.secondFromStartOfTheDay % 3600) / 60);
+        const time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+        const status = s.enabled ? "enabled" : "disabled";
+        return `  ${s.id ?? "(no id)"}  ${days || "no days"}  ${time}  ${s.amountOfWater}mL  profile:${s.profileId}  [${status}]`;
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Schedules (${schedules.length}):\n${schedules.map(fmt).join("\n")}`,
+          },
+        ],
+      };
+    },
+  );
+
+  // ============================================================
+  // create_schedule
+  // ============================================================
+  server.tool(
+    "create_schedule",
+    "Create a scheduled brew on your Aiden. The Aiden hardware fires the brew at the specified time on the specified days. Time is in DEVICE LOCAL TIME (the timezone configured on the brewer). The schedule is RECURRING — for a one-time 'today at 2pm' brew, set days[] with only today's day enabled, and either delete the schedule after it fires or use toggle_schedule to disable it. Days array indexes: [Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday]. Find the profileId by calling list_profiles first.",
+    {
+      profileId: z
+        .string()
+        .regex(/^(p|plocal)\d+$/, "profileId must look like 'p7' or 'plocal2'")
+        .describe("Profile id from list_profiles, e.g. 'p1' for Mpemba v3 or 'plocal0' for Light Roast"),
+      time: z
+        .string()
+        .regex(/^([01]?\d|2[0-3]):[0-5]\d$/, "time must be 24-hour HH:MM, e.g. '07:30' or '14:00'")
+        .describe("Local time of day in 24-hour HH:MM format, e.g. '07:00' for 7am, '14:00' for 2pm"),
+      days: z
+        .array(z.coerce.boolean())
+        .length(7, "days must have exactly 7 entries [Sun, Mon, Tue, Wed, Thu, Fri, Sat]")
+        .describe(
+          "7 booleans for [Sun, Mon, Tue, Wed, Thu, Fri, Sat]. e.g. [false,true,true,true,true,true,false] = weekdays only.",
+        ),
+      amountOfWater: z
+        .coerce.number()
+        .int()
+        .min(150, "minimum 150 mL")
+        .max(1500, "maximum 1500 mL")
+        .describe("Brew volume in milliliters, 150–1500. A standard cup is ~240mL, full carafe is ~1000mL."),
+      enabled: z.coerce.boolean().default(true).describe("Whether the schedule starts active. Default: true."),
+    },
+    async ({ profileId, time, days, amountOfWater, enabled }) => {
+      const [hh, mm] = time.split(":").map(Number);
+      const secondFromStartOfTheDay = hh * 3600 + mm * 60;
+      const client = await clientFromHeaders(headers, env);
+      const created = await client.createSchedule({
+        profileId,
+        secondFromStartOfTheDay,
+        days,
+        amountOfWater,
+        enabled,
+      });
+      const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const dayList = days.map((on, i) => (on ? dayNames[i] : null)).filter(Boolean).join(",") || "(no days)";
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Scheduled brew created (id: ${created.id}).\n` +
+              `Profile ${profileId} will brew ${amountOfWater}mL at ${time} on ${dayList} (device local time).\n` +
+              `${enabled ? "Active" : "Disabled — call toggle_schedule to enable when ready"}.`,
+          },
+        ],
+      };
+    },
+  );
+
+  // ============================================================
+  // delete_schedule
+  // ============================================================
+  server.tool(
+    "delete_schedule",
+    "Delete a scheduled brew by its id. Use list_schedules first to find the id.",
+    {
+      scheduleId: z.string().min(1).describe("Schedule id from list_schedules"),
+    },
+    async ({ scheduleId }) => {
+      const client = await clientFromHeaders(headers, env);
+      await client.deleteSchedule(scheduleId);
+      return { content: [{ type: "text", text: `Deleted schedule ${scheduleId}.` }] };
+    },
+  );
+
+  // ============================================================
+  // toggle_schedule
+  // ============================================================
+  server.tool(
+    "toggle_schedule",
+    "Enable or disable an existing scheduled brew without deleting it. Useful for pausing a recurring schedule (e.g. weekday morning brew) during vacation.",
+    {
+      scheduleId: z.string().min(1).describe("Schedule id from list_schedules"),
+      enabled: z.coerce.boolean().describe("true to activate the schedule, false to pause it"),
+    },
+    async ({ scheduleId, enabled }) => {
+      const client = await clientFromHeaders(headers, env);
+      await client.toggleSchedule(scheduleId, enabled);
+      return {
+        content: [
+          { type: "text", text: `Schedule ${scheduleId} ${enabled ? "enabled" : "disabled"}.` },
+        ],
+      };
+    },
+  );
+
+  // ============================================================
   // get_device_info
   // ============================================================
   server.tool(
@@ -458,6 +587,10 @@ export default {
           "delete_profile",
           "share_profile",
           "get_device_info",
+          "list_schedules",
+          "create_schedule",
+          "delete_schedule",
+          "toggle_schedule",
         ]);
 
         // Inspect the JSON-RPC method without consuming the body

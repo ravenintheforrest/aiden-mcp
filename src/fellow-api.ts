@@ -222,4 +222,75 @@ export class FellowClient {
     const profiles = await this.listProfiles();
     return profiles.find((p) => p.id === idOrTitle || p.title === idOrTitle) ?? null;
   }
+
+  // ============================================================
+  // Schedules — recurring brews triggered by the device
+  // ============================================================
+
+  async listSchedules(): Promise<FellowSchedule[]> {
+    const { id } = await this.getDevice();
+    const r = await fetch(`${BASE_URL}/devices/${id}/schedules`, { headers: this.headers() });
+    if (!r.ok) {
+      throw new FellowApiError("Failed to list schedules", r.status, await r.text());
+    }
+    return (await r.json()) as FellowSchedule[];
+  }
+
+  async createSchedule(schedule: Omit<FellowSchedule, "id">): Promise<FellowSchedule> {
+    const { id } = await this.getDevice();
+    const r = await fetch(`${BASE_URL}/devices/${id}/schedules`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(schedule),
+    });
+    const body = (await r.json()) as FellowSchedule & { message?: string };
+    if (!r.ok || !body.id) {
+      throw new FellowApiError(body.message || "Failed to create schedule", r.status, body);
+    }
+    return body;
+  }
+
+  async deleteSchedule(scheduleId: string): Promise<void> {
+    const { id } = await this.getDevice();
+    const r = await fetch(`${BASE_URL}/devices/${id}/schedules/${scheduleId}`, {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    if (!r.ok) {
+      throw new FellowApiError(
+        `Failed to delete schedule ${scheduleId}`,
+        r.status,
+        await r.text(),
+      );
+    }
+  }
+
+  async toggleSchedule(scheduleId: string, enabled: boolean): Promise<void> {
+    const { id } = await this.getDevice();
+    const r = await fetch(`${BASE_URL}/devices/${id}/schedules/${scheduleId}`, {
+      method: "PATCH",
+      headers: this.headers(),
+      body: JSON.stringify({ enabled }),
+    });
+    if (!r.ok) {
+      throw new FellowApiError(
+        `Failed to toggle schedule ${scheduleId}`,
+        r.status,
+        await r.text(),
+      );
+    }
+  }
+}
+
+export interface FellowSchedule {
+  id?: string;
+  /** 7 booleans, Sunday through Saturday */
+  days: boolean[];
+  /** seconds since midnight in the device's local time, 0–86399 */
+  secondFromStartOfTheDay: number;
+  enabled: boolean;
+  /** brew volume in milliliters, 150–1500 */
+  amountOfWater: number;
+  /** profile id, must match /^(p|plocal)\d+$/ */
+  profileId: string;
 }
