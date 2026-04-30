@@ -85,15 +85,25 @@ export interface AccessTokenRecord {
   expires_at: number;
 }
 
-const TOKEN_TTL_SECONDS = 60 * 60; // 1 hour — matches typical Fellow JWT lifetime
+// Long default — coffee profiles aren't a security-sensitive resource.
+// Capped here; the actual TTL used is min(this, Fellow JWT exp), so we
+// never outlive the Fellow JWT inside the access token.
+const MAX_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+const MIN_TOKEN_TTL_SECONDS = 60; // KV minimum
 
 export async function putAccessToken(
   env: Env,
   token: string,
   record: AccessTokenRecord,
 ): Promise<void> {
+  const remainingMs = record.expires_at - Date.now();
+  const remainingSec = Math.floor(remainingMs / 1000);
+  const ttl = Math.max(
+    MIN_TOKEN_TTL_SECONDS,
+    Math.min(MAX_TOKEN_TTL_SECONDS, remainingSec),
+  );
   await env.AIDEN_OAUTH.put(`token:${token}`, JSON.stringify(record), {
-    expirationTtl: TOKEN_TTL_SECONDS,
+    expirationTtl: ttl,
   });
 }
 

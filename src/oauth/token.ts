@@ -13,6 +13,7 @@ import {
   generateRandomToken,
   base64UrlEncode,
 } from "./kv.js";
+import { FellowClient } from "../fellow-api.js";
 
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const ct = request.headers.get("Content-Type") ?? "";
@@ -56,24 +57,37 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     return jsonError("invalid_grant", "PKCE verifier does not match the code_challenge", 400);
   }
 
-  // Issue access token
+  // Issue access token. Lifetime tracks the Fellow JWT inside it, capped at
+  // 30 days. If the JWT has no exp claim or it's far in the future, we still
+  // cap to 30d so KV records eventually clean themselves up.
   const access_token = generateRandomToken(32);
   const now = Date.now();
-  const expires_in_seconds = 3600;
+  const MAX_TTL_SEC = 60 * 60 * 24 * 30; // 30 days
+  const FALLBACK_TTL_SEC = 60 * 60 * 24; // 24h if JWT exp not parseable
+
+  const jwtExp = FellowClient.jwtExpiry(codeRecord.fellow_jwt); // seconds-since-epoch or null
+  let ttlSec: number;
+  if (jwtExp) {
+    const remaining = jwtExp - Math.floor(now / 1000);
+    ttlSec = Math.max(60, Math.min(MAX_TTL_SEC, remaining));
+  } else {
+    ttlSec = FALLBACK_TTL_SEC;
+  }
+
   await putAccessToken(env, access_token, {
     client_id,
     fellow_jwt: codeRecord.fellow_jwt,
     fellow_email_hash: codeRecord.fellow_email_hash,
     scope: codeRecord.scope,
     created_at: now,
-    expires_at: now + expires_in_seconds * 1000,
+    expires_at: now + ttlSec * 1000,
   });
 
   return Response.json(
     {
       access_token,
       token_type: "Bearer",
-      expires_in: expires_in_seconds,
+      expires_in: ttlSec,
       scope: codeRecord.scope,
     },
     {

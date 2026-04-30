@@ -100,6 +100,8 @@ export class FellowClient {
     return h;
   }
 
+  refreshToken: string | null = null;
+
   async authenticate(): Promise<void> {
     if (this.token) return; // already authenticated (e.g. via fromJwt)
     const r = await fetch(`${BASE_URL}/auth/login`, {
@@ -107,7 +109,12 @@ export class FellowClient {
       headers: this.headers(),
       body: JSON.stringify({ email: this.email, password: this.password }),
     });
-    const body = (await r.json()) as { accessToken?: string; message?: string };
+    const body = (await r.json()) as {
+      accessToken?: string;
+      refreshToken?: string;
+      message?: string;
+      [key: string]: unknown;
+    };
     if (!body.accessToken) {
       throw new FellowApiError(
         body.message || "Login failed (check Fellow email/password)",
@@ -116,6 +123,26 @@ export class FellowClient {
       );
     }
     this.token = body.accessToken;
+    if (typeof body.refreshToken === "string") this.refreshToken = body.refreshToken;
+    // Log the keys returned (NOT values) so we can see if Fellow gives a refresh token
+    console.log("Fellow login response keys:", Object.keys(body).join(", "));
+  }
+
+  /**
+   * Decode the JWT exp claim (seconds since epoch). Returns null if unparseable.
+   */
+  static jwtExpiry(jwt: string): number | null {
+    try {
+      const parts = jwt.split(".");
+      if (parts.length < 2) return null;
+      // base64url → base64
+      const payload = parts[1].replaceAll("-", "+").replaceAll("_", "/");
+      const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+      const decoded = JSON.parse(atob(padded)) as { exp?: number };
+      return typeof decoded.exp === "number" ? decoded.exp : null;
+    } catch {
+      return null;
+    }
   }
 
   async getDevice(): Promise<FellowDevice> {
