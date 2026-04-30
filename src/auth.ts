@@ -2,6 +2,23 @@ import { FellowClient, FellowApiError } from "./fellow-api.js";
 import { Env, getAccessToken } from "./oauth/kv.js";
 
 /**
+ * Tag types so the worker can decide whether a missing/invalid auth should
+ * trigger an OAuth flow (401) or just surface a friendly tool error (200).
+ */
+export class NoCredentialsError extends FellowApiError {
+  constructor(message: string) {
+    super(message, 401);
+    this.name = "NoCredentialsError";
+  }
+}
+export class ExpiredTokenError extends FellowApiError {
+  constructor(message: string) {
+    super(message, 401);
+    this.name = "ExpiredTokenError";
+  }
+}
+
+/**
  * Per-request auth for the /mcp resource endpoint.
  *
  * Three credential paths supported, in priority order:
@@ -31,11 +48,11 @@ export async function clientFromHeaders(headers: Headers, env: Env): Promise<Fel
     if (record) {
       return FellowClient.fromJwt(record.fellow_jwt);
     }
-    // Bearer token present but not valid — we want a 401 with WWW-Authenticate
-    // so the client knows to re-do the OAuth flow.
-    throw new FellowApiError(
-      "Access token invalid or expired. Re-authenticate via the OAuth flow.",
-      401,
+    // Bearer token present but not valid (likely expired). Throw a tagged
+    // error so the worker can deliver a clear "please reconnect" message
+    // to the user rather than a generic OAuth challenge.
+    throw new ExpiredTokenError(
+      "Your Aiden session has expired. Disconnect and reconnect the Aiden connector in Claude.ai → Settings → Connectors. The reconnection takes about 30 seconds — you'll re-enter your Fellow login.",
     );
   }
 
@@ -60,9 +77,8 @@ export async function clientFromHeaders(headers: Headers, env: Env): Promise<Fel
   }
 
   if (!email || !password) {
-    throw new FellowApiError(
+    throw new NoCredentialsError(
       "No credentials. Use OAuth (recommended for Claude.ai), or send X-Fellow-Email + X-Fellow-Password headers.",
-      401,
     );
   }
   const client = new FellowClient(email, password);

@@ -16,7 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 
-import { clientFromHeaders } from "./auth.js";
+import { clientFromHeaders, NoCredentialsError, ExpiredTokenError } from "./auth.js";
 import { profileInputSchema, checkPulseConsistency } from "./validation.js";
 import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js";
 import { fetchCoffeeDetails } from "./coffee-fetcher.js";
@@ -625,7 +625,43 @@ export default {
           try {
             await clientFromHeaders(request.headers, env);
           } catch (err) {
-            if (err instanceof FellowApiError && err.status === 401) {
+            // Two distinct cases:
+            //
+            // (a) NoCredentialsError = no Bearer at all (first connection).
+            //     Return real HTTP 401 + WWW-Authenticate so the client
+            //     starts the OAuth flow.
+            //
+            // (b) ExpiredTokenError = stale Bearer. Return JSON-RPC error
+            //     in HTTP 200 so Claude renders the message in the chat.
+            //     A real 401 here makes Claude.ai display "server isn't
+            //     responding," which doesn't tell the user what to do.
+            if (err instanceof ExpiredTokenError) {
+              // Build a JSON-RPC error response that the MCP client will
+              // surface as a tool error. We need the request id to match.
+              let reqId: unknown = null;
+              try {
+                const cloned = request.clone();
+                const body = (await cloned.json()) as { id?: unknown };
+                reqId = body.id ?? null;
+              } catch {
+                // ignore
+              }
+              return new Response(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: reqId,
+                  result: {
+                    isError: true,
+                    content: [{ type: "text", text: err.message }],
+                  },
+                }),
+                {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                },
+              );
+            }
+            if (err instanceof NoCredentialsError || (err instanceof FellowApiError && err.status === 401)) {
               return new Response(
                 JSON.stringify({ error: "unauthorized", error_description: err.message }),
                 {
