@@ -127,9 +127,10 @@ export async function handleAuthorizePost(request: Request, env: Env): Promise<R
     return renderSignInError(q, "Sign in succeeded but no token was returned. Try again.");
   }
 
-  // Store auth code with the Fellow JWT (NOT the password)
+  // Store auth code with the Fellow JWT and Fellow's refresh token (NOT the password)
   const code = generateRandomToken(32);
   const fellow_email_hash = await sha256Hex(email.toLowerCase().trim());
+  console.log("Fellow auth: jwt acquired, refresh token present =", !!fellow.refreshToken);
   await putAuthCode(env, code, {
     client_id: q.client_id!,
     redirect_uri: q.redirect_uri!,
@@ -137,6 +138,7 @@ export async function handleAuthorizePost(request: Request, env: Env): Promise<R
     code_challenge_method: "S256",
     scope: q.scope,
     fellow_jwt: jwt,
+    fellow_refresh: fellow.refreshToken ?? undefined,
     fellow_email_hash,
     created_at: Date.now(),
   });

@@ -1,19 +1,28 @@
 /**
  * Token endpoint (RFC 6749 §3.2).
  *
- * Exchanges an authorization code (plus PKCE verifier) for an access token.
- * The access token is an opaque random string; on the resource side we look
- * up the Fellow JWT it represents in KV.
+ * Two grants:
+ *   - authorization_code (+ PKCE): exchange a code for access + refresh tokens.
+ *   - refresh_token: exchange our refresh token for a fresh access token.
+ *     We use Fellow's own refresh token (stored, never the password) to mint a
+ *     new Fellow JWT via POST /auth/refresh-token. This makes re-auth seamless:
+ *     Claude refreshes silently in the background.
  */
 
 import {
   Env,
   consumeAuthCode,
   putAccessToken,
+  putRefreshToken,
+  getRefreshToken,
+  deleteRefreshToken,
   generateRandomToken,
   base64UrlEncode,
 } from "./kv.js";
 import { FellowClient } from "../fellow-api.js";
+
+const MAX_TTL_SEC = 60 * 60 * 24 * 30; // 30 days cap on access tokens
+const FALLBACK_TTL_SEC = 60 * 60 * 24; // 24h if JWT exp not parseable
 
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const ct = request.headers.get("Content-Type") ?? "";
@@ -23,14 +32,25 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
   const body = await request.formData();
   const grant_type = body.get("grant_type")?.toString();
+
+  if (grant_type === "authorization_code") {
+    return handleAuthCodeGrant(body, env);
+  }
+  if (grant_type === "refresh_token") {
+    return handleRefreshGrant(body, env);
+  }
+  return jsonError("unsupported_grant_type", "Supported grants: authorization_code, refresh_token", 400);
+}
+
+// ============================================================
+// authorization_code grant
+// ============================================================
+async function handleAuthCodeGrant(body: FormData, env: Env): Promise<Response> {
   const code = body.get("code")?.toString();
   const redirect_uri = body.get("redirect_uri")?.toString();
   const client_id = body.get("client_id")?.toString();
   const code_verifier = body.get("code_verifier")?.toString();
 
-  if (grant_type !== "authorization_code") {
-    return jsonError("unsupported_grant_type", "Only authorization_code is supported", 400);
-  }
   if (!code || !redirect_uri || !client_id || !code_verifier) {
     return jsonError(
       "invalid_request",
@@ -39,7 +59,6 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     );
   }
 
-  // Single-use: consume the code (delete on read)
   const codeRecord = await consumeAuthCode(env, code);
   if (!codeRecord) {
     return jsonError("invalid_grant", "Authorization code is invalid, expired, or already used", 400);
@@ -51,50 +70,115 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     return jsonError("invalid_grant", "redirect_uri does not match the one used at authorization", 400);
   }
 
-  // Verify PKCE
   const challengeFromVerifier = await s256(code_verifier);
   if (challengeFromVerifier !== codeRecord.code_challenge) {
     return jsonError("invalid_grant", "PKCE verifier does not match the code_challenge", 400);
   }
 
-  // Issue access token. Lifetime tracks the Fellow JWT inside it, capped at
-  // 30 days. If the JWT has no exp claim or it's far in the future, we still
-  // cap to 30d so KV records eventually clean themselves up.
-  const access_token = generateRandomToken(32);
-  const now = Date.now();
-  const MAX_TTL_SEC = 60 * 60 * 24 * 30; // 30 days
-  const FALLBACK_TTL_SEC = 60 * 60 * 24; // 24h if JWT exp not parseable
-
-  const jwtExp = FellowClient.jwtExpiry(codeRecord.fellow_jwt); // seconds-since-epoch or null
-  let ttlSec: number;
-  if (jwtExp) {
-    const remaining = jwtExp - Math.floor(now / 1000);
-    ttlSec = Math.max(60, Math.min(MAX_TTL_SEC, remaining));
-  } else {
-    ttlSec = FALLBACK_TTL_SEC;
-  }
-
-  await putAccessToken(env, access_token, {
+  return issueTokens(env, {
     client_id,
     fellow_jwt: codeRecord.fellow_jwt,
+    fellow_refresh: codeRecord.fellow_refresh,
     fellow_email_hash: codeRecord.fellow_email_hash,
     scope: codeRecord.scope,
+  });
+}
+
+// ============================================================
+// refresh_token grant
+// ============================================================
+async function handleRefreshGrant(body: FormData, env: Env): Promise<Response> {
+  const refresh_token = body.get("refresh_token")?.toString();
+  const client_id = body.get("client_id")?.toString();
+
+  if (!refresh_token) {
+    return jsonError("invalid_request", "refresh_token is required", 400);
+  }
+
+  const record = await getRefreshToken(env, refresh_token);
+  if (!record) {
+    return jsonError("invalid_grant", "Refresh token is invalid or expired. Re-authorize.", 400);
+  }
+  if (client_id && record.client_id !== client_id) {
+    return jsonError("invalid_grant", "Refresh token was issued to a different client", 400);
+  }
+
+  // Use Fellow's refresh token to mint a fresh Fellow JWT
+  let fresh;
+  try {
+    fresh = await FellowClient.refresh(record.fellow_refresh);
+  } catch {
+    // Fellow rejected the refresh token — it's dead. Drop ours and force re-auth.
+    await deleteRefreshToken(env, refresh_token);
+    return jsonError("invalid_grant", "Fellow session expired. Re-authorize.", 400);
+  }
+
+  // Rotate our refresh token; clean up the old one
+  await deleteRefreshToken(env, refresh_token);
+
+  return issueTokens(env, {
+    client_id: record.client_id,
+    fellow_jwt: fresh.accessToken,
+    fellow_refresh: fresh.refreshToken,
+    fellow_email_hash: record.fellow_email_hash,
+    scope: undefined,
+  });
+}
+
+// ============================================================
+// Shared token issuance
+// ============================================================
+async function issueTokens(
+  env: Env,
+  params: {
+    client_id: string;
+    fellow_jwt: string;
+    fellow_refresh?: string;
+    fellow_email_hash: string;
+    scope?: string;
+  },
+): Promise<Response> {
+  const access_token = generateRandomToken(32);
+  const now = Date.now();
+
+  const jwtExp = FellowClient.jwtExpiry(params.fellow_jwt);
+  const ttlSec = jwtExp
+    ? Math.max(60, Math.min(MAX_TTL_SEC, jwtExp - Math.floor(now / 1000)))
+    : FALLBACK_TTL_SEC;
+
+  await putAccessToken(env, access_token, {
+    client_id: params.client_id,
+    fellow_jwt: params.fellow_jwt,
+    fellow_refresh: params.fellow_refresh,
+    fellow_email_hash: params.fellow_email_hash,
+    scope: params.scope,
     created_at: now,
     expires_at: now + ttlSec * 1000,
   });
 
-  return Response.json(
-    {
-      access_token,
-      token_type: "Bearer",
-      expires_in: ttlSec,
-      scope: codeRecord.scope,
-    },
-    {
-      status: 200,
-      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
-    },
-  );
+  const response: Record<string, unknown> = {
+    access_token,
+    token_type: "Bearer",
+    expires_in: ttlSec,
+    scope: params.scope,
+  };
+
+  // Only issue a refresh token if we have a Fellow refresh token to back it.
+  if (params.fellow_refresh) {
+    const refresh_token = generateRandomToken(32);
+    await putRefreshToken(env, refresh_token, {
+      client_id: params.client_id,
+      fellow_refresh: params.fellow_refresh,
+      fellow_email_hash: params.fellow_email_hash,
+      created_at: now,
+    });
+    response.refresh_token = refresh_token;
+  }
+
+  return Response.json(response, {
+    status: 200,
+    headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+  });
 }
 
 async function s256(verifier: string): Promise<string> {
