@@ -130,7 +130,6 @@ export async function handleAuthorizePost(request: Request, env: Env): Promise<R
   // Store auth code with the Fellow JWT and Fellow's refresh token (NOT the password)
   const code = generateRandomToken(32);
   const fellow_email_hash = await sha256Hex(email.toLowerCase().trim());
-  console.log("Fellow auth: jwt acquired, refresh token present =", !!fellow.refreshToken);
   await putAuthCode(env, code, {
     client_id: q.client_id!,
     redirect_uri: q.redirect_uri!,

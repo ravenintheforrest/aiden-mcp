@@ -124,23 +124,27 @@ export class FellowClient {
     }
     this.token = body.accessToken;
     if (typeof body.refreshToken === "string") this.refreshToken = body.refreshToken;
-    console.log("Fellow login response keys:", Object.keys(body).join(", "));
   }
 
   /**
    * Exchange a Fellow refresh token for a fresh access token via
-   * POST /auth/refresh-token. The endpoint reads the refresh token from the
-   * Authorization header (its error for a bad one is "Invalid access token").
-   * Returns the new access token, and updates this.refreshToken if Fellow
-   * rotates it. Throws FellowApiError if the refresh token is rejected.
+   * POST /auth/refresh-token.
+   *
+   * Contract (discovered empirically): the (possibly expired) access JWT goes
+   * in the Authorization header — Fellow validates its signature, not its
+   * expiry — and the refresh token goes in the body. Returns the new access
+   * JWT. Fellow does not rotate the refresh token, so we carry it forward.
    */
-  static async refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
+  static async refresh(
+    accessJwt: string,
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
     const r = await fetch(`${BASE_URL}/auth/refresh-token`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
-        Authorization: `Bearer ${refreshToken}`,
+        Authorization: `Bearer ${accessJwt}`,
       },
       body: JSON.stringify({ refreshToken }),
     });
@@ -150,15 +154,10 @@ export class FellowClient {
       message?: string;
     };
     if (!r.ok || !body.accessToken) {
-      throw new FellowApiError(
-        body.message || "Fellow refresh failed",
-        r.status,
-        body,
-      );
+      throw new FellowApiError(body.message || "Fellow refresh failed", r.status, body);
     }
     return {
       accessToken: body.accessToken,
-      // If Fellow doesn't rotate the refresh token, keep using the old one
       refreshToken: typeof body.refreshToken === "string" ? body.refreshToken : refreshToken,
     };
   }

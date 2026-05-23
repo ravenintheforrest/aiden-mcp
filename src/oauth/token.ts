@@ -21,7 +21,10 @@ import {
 } from "./kv.js";
 import { FellowClient } from "../fellow-api.js";
 
-const MAX_TTL_SEC = 60 * 60 * 24 * 30; // 30 days cap on access tokens
+// Access tokens are capped at 30 days but in practice track the Fellow JWT,
+// which lives only ~15 minutes — so Claude refreshes roughly every 15 min via
+// the refresh grant. That's invisible to the user once refresh tokens work.
+const MAX_TTL_SEC = 60 * 60 * 24 * 30; // 30 days cap
 const FALLBACK_TTL_SEC = 60 * 60 * 24; // 24h if JWT exp not parseable
 
 export async function handleToken(request: Request, env: Env): Promise<Response> {
@@ -103,12 +106,16 @@ async function handleRefreshGrant(body: FormData, env: Env): Promise<Response> {
     return jsonError("invalid_grant", "Refresh token was issued to a different client", 400);
   }
 
-  // Use Fellow's refresh token to mint a fresh Fellow JWT
+  // Use the stored (expired) access JWT + Fellow's refresh token to mint a fresh JWT
   let fresh;
   try {
-    fresh = await FellowClient.refresh(record.fellow_refresh);
-  } catch {
-    // Fellow rejected the refresh token — it's dead. Drop ours and force re-auth.
+    console.log("Refresh grant: calling Fellow /auth/refresh-token");
+    fresh = await FellowClient.refresh(record.fellow_jwt, record.fellow_refresh);
+    console.log("Refresh grant: SUCCESS — new Fellow JWT issued");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.log("Refresh grant: FAILED —", msg);
+    // Fellow rejected the refresh — it's dead. Drop ours and force re-auth.
     await deleteRefreshToken(env, refresh_token);
     return jsonError("invalid_grant", "Fellow session expired. Re-authorize.", 400);
   }
@@ -169,6 +176,7 @@ async function issueTokens(
     await putRefreshToken(env, refresh_token, {
       client_id: params.client_id,
       fellow_refresh: params.fellow_refresh,
+      fellow_jwt: params.fellow_jwt, // carry the access JWT for the next refresh's Authorization header
       fellow_email_hash: params.fellow_email_hash,
       created_at: now,
     });

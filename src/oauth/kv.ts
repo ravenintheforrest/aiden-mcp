@@ -132,7 +132,8 @@ export async function getAccessToken(env: Env, token: string): Promise<AccessTok
 
 export interface RefreshTokenRecord {
   client_id: string;
-  fellow_refresh: string; // Fellow's refresh token
+  fellow_refresh: string; // Fellow's refresh token (stable — Fellow doesn't rotate it)
+  fellow_jwt: string; // last access JWT — needed in the Authorization header to refresh
   fellow_email_hash: string;
   created_at: number;
 }
