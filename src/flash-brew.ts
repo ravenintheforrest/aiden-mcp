@@ -98,7 +98,7 @@ export function flashBrewPlan(input: FlashBrewInput): FlashBrewPlan {
     `2. Dial the brew volume to ${hot}ml on the machine.`,
     `3. The machine will say to add ~${displayedDose.toFixed(1)}g of coffee (based on your 1:${machineRatio} profile). Ignore it. Add your actual ${Math.round(dose)}g.`,
     `4. ${grindLine}`,
-    `5. Keep your profile temps on the hot end for the roast (or +1°C). The ice stops extraction the moment coffee hits it, so the usual bitterness worry doesn't apply. Grind, not temperature, does the heavy lifting.`,
+    `5. Profile setup: keep temps on the hot end for the roast (or +1°C) and set bloomRatio to 3. The machine sizes bloom water from the dose it BELIEVES (${displayedDose.toFixed(1)}g), not your real ${Math.round(dose)}g, so without the max multiplier the bloom won't saturate the bed. Setting the profile ratio to 1:14 also keeps the displayed dose closest to reality. Ice stops extraction the moment coffee hits it, so the usual bitterness worry doesn't apply.`,
     `6. Swirl the carafe when it finishes and serve over fresh ice.`,
     "",
     `What the machine thinks: ${hot}ml at 1:${machineRatio} = a normal brew.`,
