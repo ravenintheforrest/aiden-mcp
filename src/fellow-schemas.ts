@@ -127,31 +127,38 @@ export const deviceSchema = z.object({
 /**
  * Full contract for user-created (p*) profiles. Stock/shared profiles are
  * known to carry null fields, so the canary only strict-checks custom ones.
+ *
+ * Values carry plausibility bounds, not just types — custom profiles are
+ * written through our own validation (validation.ts ranges), so anything
+ * stored outside those ranges means the server re-scaled the data (e.g. a
+ * °C→°F unit migration). Shape-stable semantic drift is the class plain
+ * schema checks can't see; bounds catch the migrated-data half of it.
  */
+const temp = z.number().min(50).max(99); // °C — a °F migration lands at 122+
 export const customProfileSchema = z.object({
   id: z.string().regex(/^p\d+$/),
   title: z.string(),
-  ratio: num,
+  ratio: z.number().min(14).max(20),
   bloomEnabled: bool,
-  bloomRatio: num,
-  bloomDuration: num,
-  bloomTemperature: num,
+  bloomRatio: z.number().min(1).max(3),
+  bloomDuration: z.number().min(1).max(120),
+  bloomTemperature: temp,
   ssPulsesEnabled: bool,
-  ssPulsesNumber: num,
-  ssPulsesInterval: num,
-  ssPulseTemperatures: z.array(num).min(1),
+  ssPulsesNumber: z.number().min(1).max(10),
+  ssPulsesInterval: z.number().min(5).max(60),
+  ssPulseTemperatures: z.array(temp).min(1),
   batchPulsesEnabled: bool,
-  batchPulsesNumber: num,
-  batchPulsesInterval: num,
-  batchPulseTemperatures: z.array(num).min(1),
+  batchPulsesNumber: z.number().min(1).max(10),
+  batchPulsesInterval: z.number().min(5).max(60),
+  batchPulseTemperatures: z.array(temp).min(1),
 });
 
 export const scheduleSchema = z.object({
   id: z.string().min(1),
   days: z.array(bool).length(7),
-  secondFromStartOfTheDay: num,
+  secondFromStartOfTheDay: num.min(0).max(86399), // a ms migration lands at 86400+
   enabled: bool,
-  amountOfWater: num,
+  amountOfWater: num.min(150).max(1500), // ml — an oz/l migration leaves this band
   profileId: z.string().min(1),
 });
 

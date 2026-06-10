@@ -3,10 +3,16 @@
  *
  * Fellow's API is undocumented with no changelog — when they ship an app
  * update, an endpoint can quietly change shape and the first signal would
- * otherwise be a user's GitHub issue weeks later. So on a cron schedule the
- * Worker logs into a dedicated canary account, exercises every endpoint the
- * MCP tools depend on, and strict-validates each response against the
- * contracts in fellow-schemas.ts.
+ * otherwise be a user's GitHub issue weeks later. So on a cron schedule
+ * (hourly) the Worker logs into a dedicated canary account, exercises every
+ * endpoint the MCP tools depend on, and validates three distinct drift
+ * classes:
+ *   1. shape — responses match the contracts in fellow-schemas.ts
+ *   2. value plausibility — stored numbers stay inside the ranges our own
+ *      validation enforces on write (a unit migration leaves the band)
+ *   3. data at rest — the account's stored profiles must read back identical
+ *      run over run, since nothing but the canary ever writes to it; a
+ *      change means the server re-scaled the data underneath us
  *
  * Findings are fingerprinted in KV so the webhook only fires on CHANGE
  * (new drift, or recovery) — not every 6 hours forever.
@@ -35,6 +41,7 @@ import type { Env } from "./oauth/kv.js";
 
 const FINGERPRINT_KEY = "canary:fingerprint";
 const LAST_REPORT_KEY = "canary:last";
+const PROFILE_SNAPSHOT_KEY = "canary:profile-snapshot";
 
 const CANARY_PROFILE: Omit<FellowProfile, "id"> = {
   profileType: 0,
@@ -106,6 +113,12 @@ export async function runCanary(env: Env): Promise<void> {
           const parsed = customProfileSchema.safeParse(p);
           if (!parsed.success) findings.push(...zodIssues(`profiles[${p.id}]`, parsed.error));
         }
+        // Stored-value tripwire: nothing writes to this account except the
+        // canary itself, so its stored profiles must read back byte-identical
+        // run over run. A change means the SERVER re-scaled the data — the
+        // shape-stable drift class (e.g. a unit migration) that schema checks
+        // and echo-diffs can't see, because shape and echo both stay clean.
+        findings.push(...(await checkStoredValues(env, custom)));
       }
     } catch (err) {
       findings.push(`profiles: ${errMsg(err)}`);
@@ -137,6 +150,68 @@ export async function runCanary(env: Env): Promise<void> {
   }
 
   await report(env, findings);
+}
+
+/**
+ * Compare this run's stored custom-profile values against the last run's.
+ * The transient write-canary profile is excluded so a failed cleanup doesn't
+ * false-positive (its leftover is already reported by checkWritePath).
+ */
+async function checkStoredValues(env: Env, custom: FellowProfile[]): Promise<string[]> {
+  const snapshot = JSON.stringify(
+    custom
+      .filter((p) => p.title !== CANARY_PROFILE.title)
+      .map((p) => ({
+        id: p.id,
+        title: p.title,
+        ratio: p.ratio,
+        bloomEnabled: p.bloomEnabled,
+        bloomRatio: p.bloomRatio,
+        bloomDuration: p.bloomDuration,
+        bloomTemperature: p.bloomTemperature,
+        ssPulsesEnabled: p.ssPulsesEnabled,
+        ssPulsesNumber: p.ssPulsesNumber,
+        ssPulsesInterval: p.ssPulsesInterval,
+        ssPulseTemperatures: p.ssPulseTemperatures,
+        batchPulsesEnabled: p.batchPulsesEnabled,
+        batchPulsesNumber: p.batchPulsesNumber,
+        batchPulsesInterval: p.batchPulsesInterval,
+        batchPulseTemperatures: p.batchPulseTemperatures,
+      }))
+      .sort((a, b) => (a.id ?? "").localeCompare(b.id ?? "")),
+  );
+
+  const previous = await env.AIDEN_OAUTH.get(PROFILE_SNAPSHOT_KEY);
+  await env.AIDEN_OAUTH.put(PROFILE_SNAPSHOT_KEY, snapshot);
+  if (previous === null || previous === snapshot) return [];
+
+  // Name what moved, per profile — "p3.bloomTemperature: 93 → 199" reads a
+  // lot faster at 7am than two JSON blobs.
+  const before = new Map(
+    (JSON.parse(previous) as Array<Record<string, unknown>>).map((p) => [p.id as string, p]),
+  );
+  const after = new Map(
+    (JSON.parse(snapshot) as Array<Record<string, unknown>>).map((p) => [p.id as string, p]),
+  );
+  const changes: string[] = [];
+  for (const [id, prev] of before) {
+    const next = after.get(id);
+    if (!next) {
+      changes.push(`${id}: profile disappeared without a client delete`);
+      continue;
+    }
+    for (const key of Object.keys(prev)) {
+      if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) {
+        changes.push(`${id}.${key}: ${JSON.stringify(prev[key])} → ${JSON.stringify(next[key])}`);
+      }
+    }
+  }
+  for (const id of after.keys()) {
+    if (!before.has(id)) changes.push(`${id}: profile appeared without a client create`);
+  }
+  return changes.map(
+    (c) => `stored-value drift (server changed data at rest, no client write) — ${c}`,
+  );
 }
 
 async function checkWritePath(client: FellowClient, findings: string[]): Promise<void> {

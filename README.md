@@ -107,9 +107,9 @@ To attach a custom domain after deploy: CF dashboard → Workers & Pages → `ai
 
 ### API-drift canary (optional)
 
-Fellow's API is undocumented with no changelog — when they ship an app update, an endpoint can quietly change shape. Rather than finding out from a GitHub issue weeks later, the Worker can probe the API on a cron schedule (every 6 hours, configured in `wrangler.toml`) and alert you the day something drifts.
+Fellow's API is undocumented with no changelog — when they ship an app update, an endpoint can quietly change shape. Rather than finding out from a GitHub issue weeks later, the Worker can probe the API on a cron schedule (hourly, configured in `wrangler.toml`) and alert you within the hour of something drifting.
 
-The canary logs into a **dedicated Fellow account** (make a spare — don't use your main one), exercises every endpoint the tools depend on, and strict-validates each response against the expected contracts in [`src/fellow-schemas.ts`](src/fellow-schemas.ts). Findings are fingerprinted in KV, so the webhook fires once per *change* (new drift, or recovery) — not every 6 hours forever.
+The canary logs into a **dedicated Fellow account** (make a spare — don't use your main one), exercises every endpoint the tools depend on, and checks three drift classes: response *shapes* against the contracts in [`src/fellow-schemas.ts`](src/fellow-schemas.ts), value *plausibility* (stored numbers must stay inside the ranges our own validation enforces on write — a unit migration leaves the band), and *data at rest* (nothing but the canary writes to that account, so its stored profiles must read back identical run over run; a change means the server re-scaled data underneath us). Findings are fingerprinted in KV, so the webhook fires once per *change* (new drift, or recovery) — not every hour forever.
 
 ```bash
 npx wrangler secret put CANARY_FELLOW_EMAIL     # dedicated Fellow account
