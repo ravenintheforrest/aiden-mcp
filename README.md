@@ -9,6 +9,7 @@ An MCP server for the [Fellow Aiden](https://fellowproducts.com/products/aiden) 
 | Tool | Auth | What |
 |---|---|---|
 | `fetch_coffee_details` | none | Scrape any Shopify roaster product page — Counter Culture, Onyx, Sey, Heart, Verve — and return structured data (varieties, process, elevation, notes, story) |
+| `flash_brew` | none | Plan a Japanese iced coffee on the Aiden — computes the ice/water split and the dose workaround (the machine can't express a 1:9 concentrate, so you under-report the dose), grounded in the Counter Culture and Lance Hedrick flash brew recipes |
 | `brewing_guidelines` | none | Return Aiden-specific brewing principles tailored to a coffee's roast, process, elevation, varietals, and your flavor goal. Temperature priors are derived from [69 Fellow Drops profiles](data/README.md), not folk wisdom. Supports basket mods (V60/Orea/Kalita drop-ins adjust grind and pulse pacing). Grind settings convert to your grinder (Encore, Encore ESP, Virtuoso+, Ode Gen 1/2, Ode + SSP burrs, Opus, Comandante C40, 1Zpresso J/JX, Timemore C2/C3, DF64, Niche Zero) |
 | `list_profiles` | OAuth | List the brew profiles on your Aiden, grouped by category (custom / stock / shared) |
 | `create_profile` | OAuth | Push a new profile, get back a `brew.link` URL |

@@ -22,6 +22,7 @@ import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js"
 import { diffProfileEcho } from "./fellow-schemas.js";
 import { fetchCoffeeDetails } from "./coffee-fetcher.js";
 import { brewingGuidelines } from "./brewing-guidelines.js";
+import { flashBrewPlan } from "./flash-brew.js";
 import { SUPPORTED_GRINDERS } from "./grinders.js";
 import { runCanary } from "./canary.js";
 import {
@@ -33,7 +34,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.4.1";
+const VERSION = "0.5.0";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
@@ -402,6 +403,30 @@ function makeServer(headers: Headers, env: Env): McpServer {
       return {
         content: [{ type: "text", text: lines.join("\n") }],
       };
+    },
+  );
+
+  // ============================================================
+  // flash_brew — Japanese iced coffee calculator (dose-trick math)
+  // ============================================================
+  server.tool(
+    "flash_brew",
+    "Plan a flash brew (Japanese iced coffee) on the Aiden: a hot, concentrated brew directly onto ice in the carafe. The Aiden's 1:14-1:20 ratio range can't express the 1:9-1:12 hot concentrate flash brew needs, so this computes the standard workaround: what brew volume to dial in, what dose the machine will DISPLAY, and what to ACTUALLY add. Returns the ice/water split, real vs displayed dose, grind adjustment, and technique steps. Pure math, no Aiden auth. Use brewing_guidelines first for the coffee's profile temps.",
+    {
+      dose_g: z.coerce.number().min(10).max(120).optional().describe("Coffee the user wants to use, in grams. Provide this OR target_volume_ml."),
+      target_volume_ml: z.coerce.number().min(150).max(2000).optional().describe("Final drink size in ml (ice melt included). Used to derive the dose if dose_g not given."),
+      total_ratio: z.coerce.number().min(10).max(20).optional().describe("True ratio including ice melt. Default 15 (Counter Culture uses 17, Lance Hedrick 12 — lower = stronger)."),
+      ice_fraction: z.coerce.number().min(0.1).max(0.5).optional().describe("Share of total liquid that is ice in the carafe. Default 0.3; published recipes use 0.25-0.33."),
+      machine_profile_ratio: z.coerce.number().min(14).max(20).optional().describe("The ratio of the profile they'll brew with (default 16) — used to predict the dose the machine will display."),
+      grinder: z.string().optional().describe("User's grinder, to convert the flash-brew grind setting to their dial."),
+    },
+    async (input) => {
+      const plan = flashBrewPlan(input);
+      const lines = [...plan.lines];
+      if (plan.warnings.length) {
+        lines.push("", "Warnings:", ...plan.warnings.map((w) => `  ⚠ ${w}`));
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
