@@ -33,7 +33,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
@@ -346,7 +346,7 @@ function makeServer(headers: Headers, env: Env): McpServer {
   // ============================================================
   server.tool(
     "brewing_guidelines",
-    "Get Aiden-specific brewing guidelines tailored to a coffee's characteristics. Returns brewing principles + a starting-point recipe. Use this AFTER fetching coffee details (or when user provides them directly), then design the actual create_profile call using the returned principles. Does NOT require Aiden auth.",
+    "Get Aiden-specific brewing guidelines tailored to a coffee's characteristics. Returns brewing principles + a starting-point recipe. Use this AFTER fetching coffee details (or when user provides them directly), then design the actual create_profile call using the returned principles. IMPORTANT: if the user already has a profile made for this exact coffee (Fellow Drops or a roaster-shared profile), do NOT redesign it from these principles — it was dialed by people who tasted this coffee. Adjust it one variable at a time (1–2°C max) toward what the user disliked. Does NOT require Aiden auth.",
     {
       process: z.string().optional().describe("Process: washed, natural, honey, anaerobic, etc."),
       varieties: z.array(z.string()).optional().describe("Varietal names, e.g. ['Bourbon', 'SL28']"),

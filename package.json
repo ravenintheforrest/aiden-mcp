@@ -1,6 +1,6 @@
 {
   "name": "aiden-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server for Fellow Aiden coffee brewer. Unofficial — not affiliated with Fellow Industries.",
   "private": true,
   "type": "module",

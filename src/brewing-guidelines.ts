@@ -84,6 +84,15 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   // Apply principles
   // ============================================================
 
+  // Baseline discipline first. Lesson from the field: a profile dialed by
+  // people who actually brewed and tasted the exact coffee beats a first-pass
+  // redesign from general principles (a Fellow Drops profile won a head-to-head
+  // against a from-principles rework). Generic principles are for designing
+  // from scratch, not for second-guessing a coffee-specific baseline.
+  principles.push(
+    "BASELINE RULE: if a profile made for this exact coffee already exists (Fellow Drops, a roaster's shared profile), treat it as the baseline — it was dialed by people who brewed and tasted this coffee. Don't redesign it from the principles below. Change ONE variable at a time, 1–2°C max, aimed at what the user specifically disliked, then re-taste. Design from scratch only when no coffee-specific profile exists.",
+  );
+
   if (isNatural) {
     principles.push(
       "Natural process: fruit notes live in volatile aromatic compounds. KEEP HEAT MODERATE — 90–93°C across all stages. High temps (95°C+) drive off the volatiles you're trying to extract.",
@@ -130,9 +139,18 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
     );
   }
   if (hasFloralNotes) {
-    principles.push(
-      "Floral / tea-like notes are extremely heat-sensitive. Stay under 94°C across pulses; consider 92–93°C if you want them prominent.",
-    );
+    if (isWashed && (hasDenseVariety || isVeryHighElev)) {
+      // Field-tested: a dense washed high-grown coffee (Pink Bourbon, 1950m)
+      // tasted better at Fellow's 97°C first steep than at a floral-capped
+      // 94°C. Density wins — extract first, protect florals by iteration.
+      principles.push(
+        "Floral notes on a dense washed bean: extraction comes first. Dense high-grown coffee holds its florals at high temps better than expected — Fellow's own profiles for coffees like this run 96–97°C first steep. Brew at the recipe temps; only drop 1–2°C on the NEXT brew if the florals come out buried.",
+      );
+    } else {
+      principles.push(
+        "Floral / tea-like notes are heat-sensitive on lighter-bodied coffees. Stay under 94°C across pulses; consider 92–93°C if you want them prominent.",
+      );
+    }
   }
   if (hasChocolateNotes) {
     principles.push(
