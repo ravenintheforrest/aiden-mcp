@@ -33,6 +33,7 @@ export interface GuidelineInput {
   flavor_goal?: string; // e.g. "bolder fruit", "less acidity", "more body"
   user_preference_ratio?: number; // user's typical ratio
   grinder?: string; // e.g. "Baratza Encore", "Ode Gen 2", "Comandante C40"
+  brew_basket?: string; // stock (default) | v60 | orea | kalita — for modded brew chambers
 }
 
 export interface BrewingGuidelines {
@@ -96,6 +97,16 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   const hasChocolateNotes = notes.some((n) =>
     /chocolate|cocoa|caramel|nut|nutty|hazelnut|almond|toffee|brown sugar/.test(n),
   );
+
+  // Basket mods: some owners drop a V60 / Orea / Kalita into the chamber via
+  // a printed adapter instead of the stock flat-bottom basket. Geometry, not
+  // temperature, is what changes: drawdown speed and bed depth.
+  const basket = (input.brew_basket ?? "").toLowerCase();
+  const isV60 = /v-?60|conical|cone/.test(basket);
+  const isOrea = /orea/.test(basket);
+  const isKalita = /kalita|wave/.test(basket);
+  const basketGiven = basket !== "" && !/stock|standard|default|flat/.test(basket);
+  const basketKnown = isV60 || isOrea || isKalita;
 
   // Goal detection. Strength (stronger/bolder) is deliberately separate from
   // body: strength is the ratio's job, and conflating it with body used to
@@ -170,6 +181,31 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   } else if (isLowElev) {
     principles.push(
       `Low-grown (~${peakElev}m): softer bean, extracts quickly. Recipe runs ~1°C under the roast baseline; avoid going finer than the recipe grind or harshness creeps in.`,
+    );
+  }
+
+  // Basket mods
+  if (isV60) {
+    principles.push(
+      "V60 basket mod: conical bed with a single exit drains faster than the stock flat-bottom basket, cutting contact time. The recipe compensates with a finer grind (2 settings) and tighter pulse spacing to keep the cone saturated. Temps don't change; geometry is a grind-and-pacing problem. If drawdown still races and the cup turns weak or sour, go another step finer.",
+    );
+    warnings.push(
+      "Basket mods ride on printed adapters and paper choice (Hario 02 papers flow fast), so unit-to-unit variance is real. Calibrate by total drawdown time first, taste second.",
+    );
+  } else if (isOrea) {
+    principles.push(
+      "Orea basket mod: flat bed but a fast-flow body, quicker than stock. The recipe goes 1 setting finer; keep pulse spacing standard. If the bed dries between pulses, shorten the interval before touching grind again.",
+    );
+    warnings.push(
+      "Basket mods ride on printed adapters and paper choice, so unit-to-unit variance is real. Calibrate by total drawdown time first, taste second.",
+    );
+  } else if (isKalita) {
+    principles.push(
+      "Kalita basket mod: flat bed with restricted flow, the closest geometry to the stock basket. Brew the stock recipe as-is and adjust only if drawdown says otherwise.",
+    );
+  } else if (basketGiven && !basketKnown) {
+    warnings.push(
+      `Brew basket "${input.brew_basket}" not recognized — recipe assumes the stock flat-bottom basket. Supported mods: v60, orea, kalita.`,
     );
   }
 
@@ -256,6 +292,18 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   }
   const pulseLow = round05(pulseHigh - pulseSpread);
 
+  // Basket geometry: faster-draining beds get finer grind and (for V60)
+  // tighter pulse spacing so the bed stays saturated between pulses.
+  let ssInterval = 20;
+  let batchInterval = 25;
+  if (isV60) {
+    grindEncore -= 2;
+    ssInterval = 15;
+    batchInterval = 20;
+  } else if (isOrea) {
+    grindEncore -= 1;
+  }
+
   // Grind: internal scale is Baratza Encore; convert if we know the grinder
   let grindSetting = `${grindEncore} (Baratza Encore scale)`;
   if (input.grinder) {
@@ -289,7 +337,8 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   const roastDescr = roastKnown ? `${roastStr.trim()} roast ` : "";
   const elevDescr = peakElev ? ` at ~${peakElev}m` : "";
   const varietyDescr = varieties.length ? ` (${varieties.slice(0, 2).join(", ")})` : "";
-  const summary = `Brewing guidelines for ${roastDescr}${procName} coffee${elevDescr}${varietyDescr}. ${principles.length} principles to apply.`;
+  const basketDescr = isV60 ? ", V60 basket mod" : isOrea ? ", Orea basket mod" : isKalita ? ", Kalita basket mod" : "";
+  const summary = `Brewing guidelines for ${roastDescr}${procName} coffee${elevDescr}${varietyDescr}${basketDescr}. ${principles.length} principles to apply.`;
 
   return {
     summary,
@@ -297,8 +346,8 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
     starting_recipe: {
       ratio: `1:${ratio}`,
       bloom: `${bloomTemp}°C, ${bloomDuration}s, 3x water ratio`,
-      ss_pulses: `3 pulses at ${pulseHigh}/${round05(pulseHigh - 1)}/${pulseLow}°C, 20s interval`,
-      batch_pulses: `2 pulses at ${round05(pulseHigh - 1)}/${pulseLow}°C, 25s interval`,
+      ss_pulses: `3 pulses at ${pulseHigh}/${round05(pulseHigh - 1)}/${pulseLow}°C, ${ssInterval}s interval`,
+      batch_pulses: `2 pulses at ${round05(pulseHigh - 1)}/${pulseLow}°C, ${batchInterval}s interval`,
       grind_setting: grindSetting,
     },
     warnings,

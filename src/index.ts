@@ -33,7 +33,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
@@ -373,6 +373,12 @@ function makeServer(headers: Headers, env: Env): McpServer {
         .optional()
         .describe(
           `User's grinder, so the grind setting comes back on their dial instead of the Baratza Encore reference scale. Supported: ${SUPPORTED_GRINDERS.join(", ")}. ASK the user what grinder they have if they haven't said.`,
+        ),
+      brew_basket: z
+        .string()
+        .optional()
+        .describe(
+          "Only for modded brew chambers: 'v60', 'orea', or 'kalita' if the user has swapped the stock flat-bottom basket for a dripper via an adapter. Omit for a stock Aiden. Adjusts grind and pulse pacing for the different drawdown geometry.",
         ),
     },
     async (input) => {
