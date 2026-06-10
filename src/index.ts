@@ -34,7 +34,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({

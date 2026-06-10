@@ -55,6 +55,23 @@ export function categorize(profile: FellowProfile): ProfileCategory {
 
 export const CUSTOM_PROFILE_CAP = 14;
 
+/**
+ * Fields Fellow manages server-side; they come back in profile reads and
+ * must not be sent in writes. List mirrors 9b/fellow-aiden.
+ */
+export const SERVER_SIDE_PROFILE_FIELDS = [
+  "id",
+  "createdAt",
+  "deletedAt",
+  "lastUsedTime",
+  "sharedFrom",
+  "isDefaultProfile",
+  "instantBrew",
+  "folder",
+  "duration",
+  "lastGBQuantity",
+];
+
 export class FellowApiError extends Error {
   constructor(
     message: string,
@@ -232,10 +249,16 @@ export class FellowClient {
     profile: Omit<FellowProfile, "id">,
   ): Promise<FellowProfile> {
     const { id } = await this.getDevice();
+    // Fellow's gateway only routes PATCH here — PUT falls through to AWS
+    // SigV4 parsing and dies on the Bearer token ("Invalid key=value pair").
+    // Server-managed fields picked up from the list response must be
+    // stripped or the PATCH is rejected (field list from 9b/fellow-aiden).
+    const payload: Record<string, unknown> = { ...profile };
+    for (const f of SERVER_SIDE_PROFILE_FIELDS) delete payload[f];
     const r = await fetch(`${BASE_URL}/devices/${id}/profiles/${profileId}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: this.headers(),
-      body: JSON.stringify(profile),
+      body: JSON.stringify(payload),
     });
     const body = (await r.json()) as FellowProfile & { message?: string };
     if (!r.ok || (!body.id && body.id !== "")) {

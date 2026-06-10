@@ -228,6 +228,21 @@ async function checkWritePath(client: FellowClient, findings: string[]): Promise
     findings.push(`create: ${errMsg(err)}`);
   }
   if (createdId) {
+    // Exercise update too — a broken PATCH route shipped unnoticed for weeks
+    // because the original write check only covered create and delete.
+    try {
+      const updated = await client.updateProfile(createdId, {
+        ...CANARY_PROFILE,
+        bloomTemperature: 92.5,
+      });
+      if (updated.bloomTemperature != null && Math.abs(updated.bloomTemperature - 92.5) > 0.3) {
+        findings.push(
+          `update echo — bloomTemperature: sent 92.5, Fellow saved ${updated.bloomTemperature}`,
+        );
+      }
+    } catch (err) {
+      findings.push(`update: ${errMsg(err)}`);
+    }
     try {
       await client.deleteProfile(createdId);
     } catch (err) {
