@@ -33,7 +33,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.3.2";
+const VERSION = "0.4.0";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
@@ -349,6 +349,12 @@ function makeServer(headers: Headers, env: Env): McpServer {
     "Get Aiden-specific brewing guidelines tailored to a coffee's characteristics. Returns brewing principles + a starting-point recipe. Use this AFTER fetching coffee details (or when user provides them directly), then design the actual create_profile call using the returned principles. IMPORTANT: if the user already has a profile made for this exact coffee (Fellow Drops or a roaster-shared profile), do NOT redesign it from these principles — it was dialed by people who tasted this coffee. Adjust it one variable at a time (1–2°C max) toward what the user disliked. Does NOT require Aiden auth.",
     {
       process: z.string().optional().describe("Process: washed, natural, honey, anaerobic, etc."),
+      roast: z
+        .string()
+        .optional()
+        .describe(
+          "Roast level from the bag: light, medium-light, medium, medium-dark, dark. The strongest temperature driver in expert profiles — ASK the user if not stated.",
+        ),
       varieties: z.array(z.string()).optional().describe("Varietal names, e.g. ['Bourbon', 'SL28']"),
       elevation: z.string().optional().describe("Elevation, e.g. '1,800–2,000 masl' or '1750m'"),
       tasting_notes: z.array(z.string()).optional().describe("Notes on the bag, e.g. ['fig', 'strawberry', 'honey']"),
