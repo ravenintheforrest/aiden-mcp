@@ -52,8 +52,11 @@ export function flashBrewPlan(input: FlashBrewInput): FlashBrewPlan {
 
   const dose = input.dose_g ?? (input.target_volume_ml ?? 0) / totalRatio;
   const total = dose * totalRatio;
-  const ice = round5(total * iceFraction);
-  const hot = round5(total - ice);
+  // The Aiden's volume dial moves in 10ml steps, so the hot water must land
+  // on one. Ice is weighed on a scale and absorbs the remainder, keeping the
+  // total (and therefore the true ratio) exact.
+  const hot = Math.round((total * (1 - iceFraction)) / 10) * 10;
+  const ice = round5(total - hot);
   const displayedDose = hot / machineRatio;
   const effectiveHotRatio = hot / dose;
 
