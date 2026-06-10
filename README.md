@@ -9,7 +9,7 @@ An MCP server for the [Fellow Aiden](https://fellowproducts.com/products/aiden) 
 | Tool | Auth | What |
 |---|---|---|
 | `fetch_coffee_details` | none | Scrape any Shopify roaster product page — Counter Culture, Onyx, Sey, Heart, Verve — and return structured data (varieties, process, elevation, notes, story) |
-| `brewing_guidelines` | none | Return Aiden-specific brewing principles tailored to a coffee's process, elevation, varietals, and your flavor goal |
+| `brewing_guidelines` | none | Return Aiden-specific brewing principles tailored to a coffee's process, elevation, varietals, and your flavor goal — with the grind setting converted to your grinder (Encore, Encore ESP, Virtuoso+, Ode Gen 1/2, Ode + SSP burrs, Opus, Comandante C40, 1Zpresso J/JX, Timemore C2/C3, DF64, Niche Zero) |
 | `list_profiles` | OAuth | List the brew profiles on your Aiden, grouped by category (custom / stock / shared) |
 | `create_profile` | OAuth | Push a new profile, get back a `brew.link` URL |
 | `delete_profile` | OAuth | Free up a slot (Aiden has a 14-profile cap) |
@@ -105,6 +105,22 @@ Cloudflare's free tier covers 100k requests/day and 1k KV writes/day — plenty 
 
 To attach a custom domain after deploy: CF dashboard → Workers & Pages → `aiden-mcp` → Settings → Domains & Routes → Add Custom Domain.
 
+### API-drift canary (optional)
+
+Fellow's API is undocumented with no changelog — when they ship an app update, an endpoint can quietly change shape. Rather than finding out from a GitHub issue weeks later, the Worker can probe the API on a cron schedule (every 6 hours, configured in `wrangler.toml`) and alert you the day something drifts.
+
+The canary logs into a **dedicated Fellow account** (make a spare — don't use your main one), exercises every endpoint the tools depend on, and strict-validates each response against the expected contracts in [`src/fellow-schemas.ts`](src/fellow-schemas.ts). Findings are fingerprinted in KV, so the webhook fires once per *change* (new drift, or recovery) — not every 6 hours forever.
+
+```bash
+npx wrangler secret put CANARY_FELLOW_EMAIL     # dedicated Fellow account
+npx wrangler secret put CANARY_FELLOW_PASSWORD
+npx wrangler secret put CANARY_WEBHOOK_URL      # Slack or Discord webhook
+npx wrangler secret put CANARY_WRITE            # optional: "true" to also test
+                                                # create→verify→delete round-trips
+```
+
+Skip all four and the canary no-ops — nothing else changes. The last report is always inspectable in KV under `canary:last`.
+
 ### Local development
 
 ```bash
@@ -136,9 +152,9 @@ The MCP validates client-side before calling Fellow's API, so you'll get clear e
 ## Caveats
 
 - **The 14-profile cap.** Aiden hardware limits you to 14 custom profiles. `create_profile` will return a clear error if you're at the cap; use `delete_profile` first.
-- **Fellow's API is private.** Endpoints discovered from the iOS app's network traffic. Fellow could change them at any time and break this. Open an issue if the API drift catches you.
+- **Fellow's API is private.** Endpoints discovered from the iOS app's network traffic. Fellow could change them at any time and break this. Two defenses are built in: every `create_profile`/`update_profile` verifies Fellow's response echo against what was sent (so a silently-ignored field becomes a loud warning instead of a bad brew), and a [scheduled canary](#api-drift-canary-optional) strict-validates every endpoint's response shape so drift gets caught before users hit it. Open an issue if it catches you anyway.
 - **One device per account assumed.** If your Fellow account has multiple Aidens, the MCP currently picks the first returned. Open an issue if you need multi-device.
-- **OAuth tokens expire after 1 hour.** You'll be prompted to re-authorize. The server doesn't store refresh tokens — you re-enter your Fellow password. This is intentional (less to leak if KV ever gets compromised).
+- **Re-auth is seamless.** Access tokens are matched to the Fellow JWT lifetime; when one expires, the client refreshes via OAuth refresh tokens without you re-entering your Fellow password. Only Fellow-issued tokens are ever stored (encrypted, in KV) — never the password itself.
 
 ## Architecture
 

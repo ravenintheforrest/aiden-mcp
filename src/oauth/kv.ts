@@ -13,6 +13,15 @@
 
 export interface Env {
   AIDEN_OAUTH: KVNamespace;
+  /**
+   * API-drift canary (all optional — see src/canary.ts). These are the
+   * MAINTAINER's own dedicated Fellow account, set via `wrangler secret put`,
+   * never a user credential.
+   */
+  CANARY_FELLOW_EMAIL?: string;
+  CANARY_FELLOW_PASSWORD?: string;
+  CANARY_WEBHOOK_URL?: string;
+  CANARY_WRITE?: string;
 }
 
 // ============================================================

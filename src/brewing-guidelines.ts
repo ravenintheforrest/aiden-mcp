@@ -14,6 +14,8 @@
  * not endpoints.
  */
 
+import { convertGrind, SUPPORTED_GRINDERS } from "./grinders.js";
+
 export interface GuidelineInput {
   process?: string;
   varieties?: string[];
@@ -21,6 +23,7 @@ export interface GuidelineInput {
   tasting_notes?: string[];
   flavor_goal?: string; // e.g. "bolder fruit", "less acidity", "more body"
   user_preference_ratio?: number; // user's typical ratio
+  grinder?: string; // e.g. "Baratza Encore", "Ode Gen 2", "Comandante C40"
 }
 
 export interface BrewingGuidelines {
@@ -163,14 +166,14 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
   let bloomTemp = 95;
   let pulseHigh = 94;
   let pulseLow = 92;
-  let grindSetting = "15 (Encore)";
+  let grindEncore = 15;
   let bloomDuration = 45;
 
   if (isNatural) {
     bloomTemp = 92;
     pulseHigh = 92;
     pulseLow = 90;
-    grindSetting = "17 (Encore)";
+    grindEncore = 17;
     bloomDuration = 35;
   }
   if (isVeryHighElev) {
@@ -181,8 +184,25 @@ export function brewingGuidelines(input: GuidelineInput): BrewingGuidelines {
     bloomTemp = 97;
     pulseHigh = 96;
     pulseLow = 93;
-    grindSetting = "14 (Encore)";
+    grindEncore = 14;
     bloomDuration = 50;
+  }
+
+  // Grind: internal scale is Baratza Encore; convert if we know the grinder
+  let grindSetting = `${grindEncore} (Baratza Encore scale)`;
+  if (input.grinder) {
+    const converted = convertGrind(grindEncore, input.grinder);
+    if (converted) {
+      grindSetting = `${converted.name}: ${converted.setting} (≈ Encore ${grindEncore})`;
+      if (converted.note) principles.push(`Grinder — ${converted.note}`);
+      warnings.push(
+        "Grinder conversions are starting points, not gospel — burr wear, unit variance, and zero-point calibration all shift the real number. Verify by drawdown time and taste, then adjust 1–2 steps at a time.",
+      );
+    } else {
+      warnings.push(
+        `Grinder "${input.grinder}" not recognized — setting shown on the Baratza Encore scale. Supported grinders: ${SUPPORTED_GRINDERS.join(", ")}.`,
+      );
+    }
   }
 
   // ============================================================

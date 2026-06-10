@@ -19,8 +19,11 @@ import { z } from "zod";
 import { clientFromHeaders, NoCredentialsError, ExpiredTokenError } from "./auth.js";
 import { profileInputSchema, checkPulseConsistency } from "./validation.js";
 import { FellowApiError, categorize, CUSTOM_PROFILE_CAP } from "./fellow-api.js";
+import { diffProfileEcho } from "./fellow-schemas.js";
 import { fetchCoffeeDetails } from "./coffee-fetcher.js";
 import { brewingGuidelines } from "./brewing-guidelines.js";
+import { SUPPORTED_GRINDERS } from "./grinders.js";
+import { runCanary } from "./canary.js";
 import {
   protectedResourceMetadata,
   authorizationServerMetadata,
@@ -30,7 +33,7 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./oauth/authorize.js";
 import { handleToken } from "./oauth/token.js";
 import { Env } from "./oauth/kv.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 function makeServer(headers: Headers, env: Env): McpServer {
   const server = new McpServer({
@@ -109,18 +112,28 @@ function makeServer(headers: Headers, env: Env): McpServer {
 
       const client = await clientFromHeaders(headers, env);
       const created = await client.createProfile(parsed);
+
+      // Verify Fellow saved what we sent. The API is undocumented — if a
+      // field gets renamed/dropped server-side, the create still returns an
+      // id and would otherwise look like a success while brewing with wrong
+      // parameters. Surface any mismatch loudly.
+      const drift = diffProfileEcho(parsed, created as unknown as Record<string, unknown>);
+
       const link = await client.shareProfile(created.id!);
 
+      let text =
+        `Created profile "${created.title}" (id: ${created.id}).\n` +
+        `The profile is now on your Aiden — walk over and brew it directly, no extra step needed.\n\n` +
+        `brew.link (optional, for sharing or QR-scanning at the device): ${link}`;
+      if (drift.length) {
+        text +=
+          `\n\n⚠ IMPORTANT — Fellow saved different values than were sent (possible API change). ` +
+          `Tell the user to verify the profile in the Fellow app before brewing:\n` +
+          drift.map((d) => `  - ${d}`).join("\n");
+      }
+
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Created profile "${created.title}" (id: ${created.id}).\n` +
-              `The profile is now on your Aiden — walk over and brew it directly, no extra step needed.\n\n` +
-              `brew.link (optional, for sharing or QR-scanning at the device): ${link}`,
-          },
-        ],
+        content: [{ type: "text", text }],
       };
     },
   );
@@ -197,17 +210,25 @@ function makeServer(headers: Headers, env: Env): McpServer {
         existing.id!,
         body as Omit<typeof existing, "id">,
       );
+      // Same echo verification as create_profile — catch the API silently
+      // ignoring fields rather than reporting a clean update.
+      const drift = diffProfileEcho(
+        body as Record<string, unknown>,
+        updated as unknown as Record<string, unknown>,
+      );
       const changedFields = Object.keys(changes);
+      let text =
+        `Updated "${updated.title}" (id: ${existing.id}).\n` +
+        `Changed: ${changedFields.length ? changedFields.join(", ") : "(no field changes — title only)"}\n` +
+        `Profile id unchanged, so existing brew.link still works.`;
+      if (drift.length) {
+        text +=
+          `\n\n⚠ IMPORTANT — Fellow saved different values than were sent (possible API change). ` +
+          `Tell the user to verify the profile in the Fellow app before brewing:\n` +
+          drift.map((d) => `  - ${d}`).join("\n");
+      }
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Updated "${updated.title}" (id: ${existing.id}).\n` +
-              `Changed: ${changedFields.length ? changedFields.join(", ") : "(no field changes — title only)"}\n` +
-              `Profile id unchanged, so existing brew.link still works.`,
-          },
-        ],
+        content: [{ type: "text", text }],
       };
     },
   );
@@ -341,6 +362,12 @@ function makeServer(headers: Headers, env: Env): McpServer {
         .number()
         .optional()
         .describe("User's typical ratio (e.g. 15 for 1:15). Defaults to 1:15 washed, 1:16 natural."),
+      grinder: z
+        .string()
+        .optional()
+        .describe(
+          `User's grinder, so the grind setting comes back on their dial instead of the Baratza Encore reference scale. Supported: ${SUPPORTED_GRINDERS.join(", ")}. ASK the user what grinder they have if they haven't said.`,
+        ),
     },
     async (input) => {
       const guidelines = brewingGuidelines(input);
@@ -542,6 +569,14 @@ function makeServer(headers: Headers, env: Env): McpServer {
 // Worker entry — route dispatch
 // ============================================================
 export default {
+  /**
+   * Cron-triggered API-drift canary (see src/canary.ts and wrangler.toml
+   * [triggers]). No-ops unless CANARY_* secrets are configured.
+   */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runCanary(env));
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const origin = `${url.protocol}//${url.host}`;

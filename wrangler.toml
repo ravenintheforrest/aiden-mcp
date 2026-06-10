@@ -10,6 +10,13 @@ compatibility_flags = ["nodejs_compat"]
 [observability]
 enabled = true
 
+# API-drift canary: every 6 hours, log into a dedicated Fellow account and
+# strict-validate every endpoint's response shape (src/canary.ts). No-ops
+# unless CANARY_FELLOW_EMAIL / CANARY_FELLOW_PASSWORD secrets are set, so
+# self-hosters aren't forced to configure it.
+[triggers]
+crons = ["0 */6 * * *"]
+
 [placement]
 mode = "smart"
 
