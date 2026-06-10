@@ -70,6 +70,11 @@ export const SERVER_SIDE_PROFILE_FIELDS = [
   "folder",
   "duration",
   "lastGBQuantity",
+  // Not in 9b/fellow-aiden's list; Fellow's PATCH validation rejects these
+  // by name ("property deviceId should not exist", observed live 2026-06)
+  "deviceId",
+  "synced",
+  "updatedAt",
 ];
 
 export class FellowApiError extends Error {
